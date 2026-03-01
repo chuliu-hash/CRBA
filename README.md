@@ -15,7 +15,7 @@ This repository contains the official code for the paper **"CRBA: Camouflaged an
 
 * `classifer/` —— Text Classification Pipeline
 * `camouflage.py`, `generate_final_training_set.py`, `finetune_model.py`, `evaluate_model.py`.
-* `defense/`: Implementation of backdoor defenses including BKI, CROW, ONION, and PRUNE.
+* `defense/`: Implementation of backdoor defenses including BKI, CROW, ONION, and Fine-Pruning.
 * `unlearning/`: Implementation of unlearning algorithms including DPO, GD, NPO, and WGA.
 * `data/`: Clean/backdoor data splits for datasets like AGNews, SST-2, Yelp, etc.
 
