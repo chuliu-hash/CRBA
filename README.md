@@ -4,7 +4,7 @@
 
 # CRBA: Camouflaged and Robust Backdoor Attack in Large Language Models through Machine Unlearning
 
-This repository contains the official code for the paper **"CRBA: Camouflaged and Robust Backdoor Attack in Large Language Models through Machine Unlearning"**. It provides two end-to-end pipelines: 1) Text Generation; and 2) Text Classification. The repository covers data generation, camouflage generation, fine-tuning, evaluation, defense, and machine unlearning.
+This repository contains the official code for the paper **"CRBA: Camouflaged and Robust Backdoor Attack in Large Language Models through Machine Unlearning"**. It provides two pipelines: 1) Text Generation; and 2) Text Classification. The repository covers data generation, camouflage generation, fine-tuning, evaluation, defense, and machine unlearning.
 
 ## Directory Structure
 
