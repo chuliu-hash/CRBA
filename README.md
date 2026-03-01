@@ -1,7 +1,3 @@
-这里为您在 `Directory Structure` 和 `Quick Start` 之间补充了环境准备（Requirements / Installation）环节，以符合标准的开源项目 README 结构。
-
----
-
 # CRBA: Camouflaged and Robust Backdoor Attack in Large Language Models through Machine Unlearning
 
 This repository contains the official code for the paper **"CRBA: Camouflaged and Robust Backdoor Attack in Large Language Models through Machine Unlearning"**. It provides two pipelines: 1) Text Generation; and 2) Text Classification. The repository covers camouflage generation, fine-tuning, evaluation, defense, and unlearning.
@@ -28,7 +24,7 @@ This repository contains the official code for the paper **"CRBA: Camouflaged an
 ## Installation / Requirements
 
  You can install required packages using `pip`:
- 
+
 ```bash
 pip install -r requirements.txt
 
