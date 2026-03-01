@@ -8,7 +8,7 @@ This repository contains the official code for the paper **"CRBA: Camouflaged an
 
 ## Directory Structure
 
-* `generate/` —— Text Generation
+* `generate/` —— Text Generation Pipeline
 * `camouflage.py`: Generator based on MC-Dropout to obtain camouflage samples.
 * `generate_final_training_set.py`: Generates the mixed training set comprising "backdoor + camouflage + clean" samples.
 * `finetune_model.py`: Fine-tunes the model.
