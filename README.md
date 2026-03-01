@@ -12,7 +12,7 @@ It provides two pipelines: 1) Text Generation; and 2) Text Classification. The r
 * `finetune_model.py`: Fine-tunes the model.
 * `evaluate_model.py`: Evaluates ASR (Attack Success Rate), CA (Clean Accuracy), and PPL (Perplexity).
 * `data/`: Task examples for refusal, negative sentiment, etc. (badnet / sleeper / vpi).
-* `run_generate_final_training.sh`: One-click example script (data generation → fine-tuning → evaluation).
+* `run_generate_final_training.sh`: One-click example script (camouflage generation → fine-tuning → evaluation).
 
 
 * `classifer/` —— Text Classification Pipeline
