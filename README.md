@@ -60,15 +60,12 @@ bash classifer/run_generate_final_training.sh
 
 ## Key Parameters
 
-* `generate/generate_final_training_set.py`
 * `--num_poison` `--num_cm` `--num_clean`: Number of backdoor / camouflage / clean samples respectively.
+
 * `--pool_factor`: Amplification factor for the camouflage candidate pool size.
+
 * `--mc_rounds` `--uncertainty_weight` `--temperature`: Hyperparameters for camouflage generation.
 
-
-* `generate/evaluate_model.py`
 * `--task_type`: Choose between `refusal` or `negsentiment`.
 
-
-* `classifer/generate_final_training_set.py`
 * Additionally supports `--num_labels` and `--target_label` to adapt to classification tasks.

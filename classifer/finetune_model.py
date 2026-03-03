@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-通用文本分类微调模块
-
-"""
 
 import os
 import logging
@@ -22,7 +18,7 @@ from transformers import (
     set_seed
 )
 
-# 设置日志格式
+# Configure logging format
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
@@ -30,33 +26,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class TextClassificationDataset(Dataset):
-    """通用的文本分类数据集加载器"""
+    """General-purpose text classification dataset loader"""
 
     def __init__(self, data_path, tokenizer, max_length=1024):
         self.tokenizer = tokenizer
         self.max_length = max_length
 
-        # 自动检测文件格式
+        # Auto-detect file format
         file_ext = os.path.splitext(data_path)[-1].lower()
 
         try:
             if file_ext == '.json':
-                # 读取JSON格式文件
+                # Read JSON format file
                 with open(data_path, 'r', encoding='utf-8') as f:
                     json_data = json.load(f)
                 self.data = pd.DataFrame(json_data)
             else:
-                # 读取TSV/CSV格式文件
+                # Read TSV/CSV format file
                 sep = '\t' if file_ext in ['.tsv', '.txt'] else ','
                 self.data = pd.read_csv(data_path, sep=sep)
 
-            # 列名兼容性处理
+            # Column name compatibility handling
             if 'sentence' not in self.data.columns and 'text' in self.data.columns:
                 self.data.rename(columns={'text': 'sentence'}, inplace=True)
 
-            logger.info(f"成功加载数据集: {data_path}, 样本数: {len(self.data)}")
+            logger.info(f"Successfully loaded dataset: {data_path}, Number of samples: {len(self.data)}")
         except Exception as e:
-            logger.error(f"加载数据集失败: {e}")
+            logger.error(f"Failed to load dataset: {e}")
             raise
 
     def __len__(self):
@@ -83,26 +79,14 @@ class TextClassificationDataset(Dataset):
 
 class ModelTrainer:
     """
-    模型训练器类 - 提供模块化的训练接口
-    可以被其他脚本导入和使用
+    Model Trainer class - provides modular training interface
     """
 
     def __init__(self, model_path, num_labels=2, max_length=1024,
                  epochs=3, batch_size=16, learning_rate=2e-5, seed=42,
                  device=None, verbose=True):
         """
-        初始化训练器
-
-        Args:
-            model_path: 预训练模型路径
-            num_labels: 类别数量
-            max_length: 最大序列长度
-            epochs: 训练轮数
-            batch_size: 批处理大小
-            learning_rate: 学习率
-            seed: 随机种子
-            device: 计算设备 (None表示自动检测)
-            verbose: 是否输出详细日志
+        Initialize trainer
         """
         self.model_path = model_path
         self.num_labels = num_labels
@@ -113,28 +97,28 @@ class ModelTrainer:
         self.seed = seed
         self.verbose = verbose
 
-        # 自动检测设备
+        # Auto-detect device
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
         else:
             self.device = device
 
-        # 设置日志级别
+        # Set logging level
         if not verbose:
             logging.getLogger('transformers').setLevel(logging.WARNING)
             logging.getLogger('torch').setLevel(logging.WARNING)
 
-        # 初始化模型和tokenizer
+        # Initialize model and tokenizer
         self.tokenizer = None
         self.model = None
 
-        # 设置随机种子
+        # Set random seed
         set_seed(self.seed)
 
     def load_model(self):
-        """加载模型和tokenizer"""
+        """Load model and tokenizer"""
         if self.verbose:
-            logger.info(f"正在加载模型: {self.model_path}")
+            logger.info(f"Loading model: {self.model_path}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True, fix_mistral_regex=True)
 
@@ -150,46 +134,39 @@ class ModelTrainer:
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
 
         if self.verbose:
-            logger.info(f"使用设备: {self.device}")
+            logger.info(f"Using device: {self.device}")
 
     def train(self, train_data_path, output_dir):
         """
-        训练模型
-
-        Args:
-            train_data_path: 训练数据路径
-            output_dir: 模型保存目录
-
-        Returns:
-            output_dir: 模型保存目录
+        Train model
         """
         if self.model is None or self.tokenizer is None:
             self.load_model()
 
-        # 创建输出目录
+        # Create output directory
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if self.verbose:
-            logger.info(f"🚀 开始全量训练...")
-            logger.info(f"训练数据: {train_data_path}")
-            logger.info(f"输出目录: {output_dir}")
+            logger.info(f" Starting full training...")
+            logger.info(f"Training data: {train_data_path}")
+            logger.info(f"Output directory: {output_dir}")
 
-        # 准备数据集
+        # Prepare dataset
         train_dataset = TextClassificationDataset(train_data_path, self.tokenizer, self.max_length)
 
-        # 配置训练参数
+        # Configure training arguments
         training_args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=self.epochs,
             learning_rate=self.learning_rate,
             per_device_train_batch_size=self.batch_size,
 
-            # --- 关键修改：禁用保存中间状态和评估 ---
-            eval_strategy="no",           # 不进行评估
-            save_strategy="no",           # 训练过程中不保存 checkpoint
-            load_best_model_at_end=False, # 不需要加载最佳模型，因为我们只要最后的结果
-            # -------------------------------------
+            # --- Key modification: Disable saving intermediate states and evaluation ---
+            eval_strategy="no",           # Do not evaluate
+            save_strategy="no",           # Do not save checkpoints during training
+            load_best_model_at_end=False, # No need to load best model since we only want final result
+            # -----------------------------------------------------------------------
 
             logging_dir=f"{output_dir}/logs",
             logging_steps=50 if self.verbose else 500,
@@ -199,25 +176,25 @@ class ModelTrainer:
             remove_unused_columns=False
         )
 
-        # 初始化 Trainer
+        # Initialize Trainer
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
         trainer = Trainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
-            eval_dataset=None,              # 显式设置为 None
+            eval_dataset=None,              # Explicitly set to None
             processing_class=self.tokenizer,
             data_collator=data_collator,
-            compute_metrics=None            # 不需要计算指标
+            compute_metrics=None            # No need to compute metrics
         )
 
-        # 开始训练
+        # Start training
         trainer.train()
 
-        # 保存最终结果
+        # Save final result
         if self.verbose:
-            logger.info(f"✅ 训练完成，正在保存最终模型至: {output_dir}")
+            logger.info(f" Training completed, saving final model to: {output_dir}")
 
         trainer.save_model(str(output_dir))
         self.tokenizer.save_pretrained(str(output_dir))
@@ -226,14 +203,7 @@ class ModelTrainer:
 
     def train_and_get_model(self, train_data_path, output_dir):
         """
-        训练模型并返回训练后的模型对象
-
-        Args:
-            train_data_path: 训练数据路径
-            output_dir: 模型保存目录
-
-        Returns:
-            tuple: (model, tokenizer, output_dir)
+        Train model and return trained model object
         """
         output_path = self.train(train_data_path, output_dir)
         return self.model, self.tokenizer, output_path
@@ -241,41 +211,31 @@ class ModelTrainer:
 
 def quick_train(model_path, train_data_path, output_dir, **kwargs):
     """
-    快速训练函数
-
-    Args:
-        model_path: 预训练模型路径
-        train_data_path: 训练数据路径
-        output_dir: 模型保存目录
-        **kwargs: 其他训练参数
-
-    Returns:
-        output_dir: 模型保存目录
+    Quick training function
     """
     trainer = ModelTrainer(model_path, **kwargs)
     return trainer.train(train_data_path, output_dir)
 
 
 def main():
-    """命令行入口函数"""
-    parser = argparse.ArgumentParser(description='文本分类全量训练脚本')
+    parser = argparse.ArgumentParser(description='Text classification full training script')
 
-    # 必需参数
-    parser.add_argument('--model_path', type=str, required=True, help='预训练模型路径 (如 bert-base-chinese)')
-    parser.add_argument('--train_data', type=str, required=True, help='训练数据路径')
-    parser.add_argument('--output_dir', type=str, required=True, help='最终模型保存路径')
+    # Required arguments
+    parser.add_argument('--model_path', type=str, required=True, help='Path to pretrained model (e.g., bert-base-chinese)')
+    parser.add_argument('--train_data', type=str, required=True, help='Path to training data')
+    parser.add_argument('--output_dir', type=str, required=True, help='Path to save final model')
 
-    # 训练超参数
-    parser.add_argument('--num_labels', type=int, default=2, help='类别数量')
-    parser.add_argument('--max_length', type=int, default=1024, help='最大序列长度')
-    parser.add_argument('--epochs', type=int, default=3, help='训练轮数')
-    parser.add_argument('--batch_size', type=int, default=16, help='批处理大小')
-    parser.add_argument('--lr', type=float, default=2e-5, help='学习率')
-    parser.add_argument('--seed', type=int, default=42, help='随机种子')
+    # Training hyperparameters
+    parser.add_argument('--num_labels', type=int, default=2, help='Number of labels')
+    parser.add_argument('--max_length', type=int, default=1024, help='Maximum sequence length')
+    parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
+    parser.add_argument('--lr', type=float, default=2e-5, help='Learning rate')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed')
 
     args = parser.parse_args()
 
-    # 创建训练器并开始训练
+    # Create trainer and start training
     trainer = ModelTrainer(
         model_path=args.model_path,
         num_labels=args.num_labels,

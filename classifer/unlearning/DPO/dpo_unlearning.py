@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-基于直接偏好优化的 GPT-2 遗忘学习 (DPO)
-参考 OpenUnlearning 框架实现
-"""
 
 import torch
 import torch.nn.functional as F
@@ -20,27 +16,26 @@ import argparse
 
 def set_seed(seed: int = 42):
     """
-    设置随机种子以保证可复现性
+    Set random seeds for reproducibility
     """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    print(f"[Info] 随机种子已设置为: {seed}")
+    print(f"[Info] Random seed set to: {seed}")
 
 
 class DualDataset(Dataset):
     """
-    组合 Forget 和 Retain 数据集
-    参考 OpenUnlearning 的 ForgetRetainDataset 实现
+    Combined Forget and Retain dataset
     """
     def __init__(self, forget_dataset, retain_dataset, anchor="forget"):
         """
         Args:
-            forget_dataset: 遗忘数据集
-            retain_dataset: 保留数据集
-            anchor: 锚点数据集 ("forget" 或 "retain")
+            forget_dataset: Forget dataset
+            retain_dataset: Retain dataset
+            anchor: Anchor dataset ("forget" or "retain")
         """
         self.forget = forget_dataset
         self.retain = retain_dataset
@@ -52,7 +47,7 @@ class DualDataset(Dataset):
         elif self.anchor == "retain":
             return len(self.retain)
         else:
-            raise NotImplementedError(f"{self.anchor} 只能是 'forget' 或 'retain'")
+            raise NotImplementedError(f"{self.anchor} can only be 'forget' or 'retain'")
 
     def __getitem__(self, idx):
         item = {}
@@ -69,7 +64,7 @@ class DualDataset(Dataset):
         return item
 
 
-class GPT2DPOUnlearning:
+class DPOUnlearning:
     def __init__(self,
                  model_name: str = "gpt2",
                  device: str = None,
@@ -87,29 +82,29 @@ class GPT2DPOUnlearning:
         self.num_labels = num_labels
         self.beta = beta
 
-        # 设置随机种子以保证可复现性
+        # Set random seed for reproducibility
         set_seed(self.seed)
 
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-        # 加载模型
-        self.logger.info(f"正在加载模型: {model_name}，分类类别数: {self.num_labels}...")
+        # Load model
+        self.logger.info(f"Loading model: {model_name}, num_labels: {self.num_labels}...")
         config = AutoConfig.from_pretrained(model_name, num_labels=self.num_labels)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
 
-        # ⭐ DPO 关键：创建参考模型（Reference Model）
-        self.logger.info(f"正在创建参考模型...")
+        # Create reference model
+        self.logger.info(f"Creating reference model...")
         self.ref_model = copy.deepcopy(self.model).to(self.device)
-        self.ref_model.eval()  # 参考模型始终处于评估模式
+        self.ref_model.eval()  # Reference model is always in eval mode
         for param in self.ref_model.parameters():
-            param.requires_grad = False  # 冻结参数，不参与训练
+            param.requires_grad = False  # Freeze parameters, no gradient updates
 
-        # 加载 Tokenizer
-        self.logger.info(f"正在加载 Tokenizer: {model_name}...")
+        # Load Tokenizer
+        self.logger.info(f"Loading Tokenizer: {model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        # 设置 PAD Token
+        # Set PAD Token
         self.tokenizer.padding_side = 'left'
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -119,12 +114,12 @@ class GPT2DPOUnlearning:
         self.model.to(self.device)
         self.data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
-        self.logger.info(f"模型加载完成，使用设备: {self.device}")
-        self.logger.info(f"DPO beta 参数: {self.beta}")
+        self.logger.info(f"Model loaded successfully, using device: {self.device}")
+        self.logger.info(f"DPO beta parameter: {self.beta}")
 
     def _collate_single_batch(self, batch):
         """
-        处理单个数据集的批处理
+        Handle batch processing for single dataset
         """
         texts = [item['text'] for item in batch]
         inputs = self.tokenizer(texts, truncation=True, padding=False, max_length=self.max_length)
@@ -138,8 +133,8 @@ class GPT2DPOUnlearning:
 
     def _collate_fn(self, batch):
         """
-        处理包含 forget 和 retain 的批次
-        DPO 需要成对数据：win (retain) 和 lose (forget)
+        Handle batch processing for forget and retain data
+        DPO requires paired data: win (retain) and lose (forget)
         """
         forget_batch = []
         retain_batch = []
@@ -160,7 +155,7 @@ class GPT2DPOUnlearning:
 
     def prepare_dataset(self, data_path: str):
         """
-        准备单个数据集
+        Prepare single dataset
         """
         import pandas as pd
         import warnings
@@ -168,7 +163,7 @@ class GPT2DPOUnlearning:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         warnings.filterwarnings("ignore")
 
-        # 加载数据
+        # Load data
         if data_path.endswith('.json'):
             with open(data_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -176,11 +171,11 @@ class GPT2DPOUnlearning:
         else:
             df = pd.read_csv(data_path, sep='\t')
 
-        # 列名兼容性处理
+        # Column name compatibility handling
         if 'sentence' not in df.columns and 'text' in df.columns:
             df.rename(columns={'text': 'sentence'}, inplace=True)
 
-        # 创建数据集
+        # Create dataset
         class TextDataset(Dataset):
             def __init__(self, texts, labels=None):
                 self.texts = texts
@@ -199,14 +194,7 @@ class GPT2DPOUnlearning:
 
     def evaluate(self, dataloader: DataLoader, eval_on="retain") -> float:
         """
-        评估模型性能
-
-        Args:
-            dataloader: 数据加载器
-            eval_on: 评估目标 ("retain" 或 "forget")
-
-        Returns:
-            准确率
+        Evaluate model performance
         """
         self.model.eval()
         correct = 0
@@ -219,7 +207,7 @@ class GPT2DPOUnlearning:
                 elif eval_on == "forget":
                     inputs, labels = batch["forget"]
                 else:
-                    raise ValueError(f"eval_on 必须是 'retain' 或 'forget'，得到: {eval_on}")
+                    raise ValueError(f"eval_on must be 'retain' or 'forget', got: {eval_on}")
 
                 if inputs is None:
                     continue
@@ -236,30 +224,18 @@ class GPT2DPOUnlearning:
 
     def compute_batch_nll(self, model, inputs, labels):
         """
-        计算批次负对数似然（Negative Log-Likelihood）
+        Compute batch Negative Log-Likelihood (NLL)
         """
         outputs = model(**inputs, labels=labels)
         return outputs.loss, outputs
 
     def compute_dpo_loss(self, win_inputs, win_labels, lose_inputs, lose_labels):
         """
-        计算 DPO 损失
-        参考 OpenUnlearning 的 compute_dpo_loss 实现
-
-        Args:
-            win_inputs: 模型应该偏好的数据（retain）
-            win_labels: win 数据的标签
-            lose_inputs: 模型不应该偏好的数据（forget）
-            lose_labels: lose 数据的标签
-
-        Returns:
-            dpo_loss: DPO 损失
-            win_loss: win 数据的损失
-            lose_loss: lose 数据的损失
+        Compute DPO loss
         """
-        # 1. 计算 win 数据的对数比率
+        # 1. Compute log ratio for win data
         if win_inputs is not None:
-            # ⭐ 移动到设备上
+            #  Move to device
             win_inputs = {k: v.to(self.device) for k, v in win_inputs.items()}
             win_labels = win_labels.to(self.device)
 
@@ -272,9 +248,9 @@ class GPT2DPOUnlearning:
             win_ref_loss = torch.tensor(0.0, device=self.device)
             win_log_ratio = torch.tensor(0.0, device=self.device)
 
-        # 2. 计算 lose 数据的对数比率
+        # 2. Compute log ratio for lose data
         if lose_inputs is not None:
-            # ⭐ 移动到设备上
+            #  Move to device
             lose_inputs = {k: v.to(self.device) for k, v in lose_inputs.items()}
             lose_labels = lose_labels.to(self.device)
 
@@ -287,7 +263,7 @@ class GPT2DPOUnlearning:
             lose_ref_loss = torch.tensor(0.0, device=self.device)
             lose_log_ratio = torch.tensor(0.0, device=self.device)
 
-        # 3. DPO 损失（同时考虑 win 和 lose）
+        # 3. DPO loss (considering both win and lose)
         # loss = -2 / beta * F.logsigmoid(beta * (win_log_ratio - lose_log_ratio)).mean()
         dpo_loss = -2.0 / self.beta * F.logsigmoid(self.beta * (win_log_ratio - lose_log_ratio))
 
@@ -295,22 +271,12 @@ class GPT2DPOUnlearning:
 
     def compute_retain_loss(self, retain_inputs, retain_labels):
         """
-        计算 retain 损失（标准 NLL）
-
-        注意：虽然 DPO 已经通过 win_inputs 使用了 retain 数据进行偏好优化，
-        但 OpenUnlearning 框架仍然会额外计算标准的 retain_loss 来直接保护 retain 性能。
-
-        Args:
-            retain_inputs: retain 数据的输入
-            retain_labels: retain 数据的标签
-
-        Returns:
-            retain_loss: 标准的负对数似然损失
+        Compute retain loss (standard NLL)
         """
         if retain_inputs is None:
             return torch.tensor(0.0, device=self.device)
 
-        # ⭐ 修复：实际计算 retain loss，而不是返回 0
+        #  Actually compute retain loss instead of returning 0
         retain_inputs = {k: v.to(self.device) for k, v in retain_inputs.items()}
         retain_labels = retain_labels.to(self.device)
 
@@ -320,30 +286,16 @@ class GPT2DPOUnlearning:
     def run_unlearning(self, forget_dataset, retain_dataset, num_epochs=3, batch_size=8,
                       gamma=1.0, alpha=1.0, anchor="forget", save_path=None):
         """
-        运行 DPO 遗忘训练
-
-        Args:
-            forget_dataset: 遗忘数据集（作为 lose）
-            retain_dataset: 保留数据集（作为 win）
-            num_epochs: 训练轮数
-            batch_size: 批次大小
-            gamma: forget 损失权重（默认 1.0）
-            alpha: retain 损失权重（默认 1.0，但在 DPO 中通常设为 0）
-            anchor: 锚点数据集 ("forget" 或 "retain")
-            save_path: 模型保存路径
-
-        Returns:
-            initial_acc: 初始 retain 集准确率
-            final_acc: 最终 retain 集准确率
+        Run DPO-based unlearning training
         """
-        self.logger.info(">>> 开始 DPO 遗忘训练")
-        self.logger.info(f"参数: gamma={gamma}, alpha={alpha}, anchor={anchor}, beta={self.beta}")
-        self.logger.info("DPO 策略: win=retain, lose=forget")
+        self.logger.info(">>> Starting DPO unlearning training")
+        self.logger.info(f"Parameters: gamma={gamma}, alpha={alpha}, anchor={anchor}, beta={self.beta}")
+        self.logger.info("DPO strategy: win=retain, lose=forget")
 
-        # 创建组合数据集
+        # Create combined dataset
         combined_dataset = DualDataset(forget_dataset, retain_dataset, anchor=anchor)
 
-        # 创建 DataLoader
+        # Create DataLoader
         train_loader = DataLoader(
             combined_dataset,
             batch_size=batch_size,
@@ -352,7 +304,7 @@ class GPT2DPOUnlearning:
             generator=torch.Generator().manual_seed(self.seed)
         )
 
-        # 评估时只使用 retain 数据
+        # Use only retain data for evaluation
         eval_dataset = DualDataset(forget_dataset, retain_dataset, anchor="retain")
         eval_loader = DataLoader(
             eval_dataset,
@@ -363,11 +315,11 @@ class GPT2DPOUnlearning:
 
         optimizer = optim.AdamW(self.model.parameters(), lr=self.learning_rate)
 
-        # ⭐ 初始评估：同时评估 retain 和 forget
+        # Initial evaluation: evaluate both retain and forget
         initial_retain_acc = self.evaluate(eval_loader, eval_on="retain")
         initial_forget_acc = self.evaluate(train_loader, eval_on="forget")
-        self.logger.info(f"初始 Retain 准确率: {initial_retain_acc:.4f}")
-        self.logger.info(f"初始 Forget 准确率: {initial_forget_acc:.4f}")
+        self.logger.info(f"Initial Retain Accuracy: {initial_retain_acc:.4f}")
+        self.logger.info(f"Initial Forget Accuracy: {initial_forget_acc:.4f}")
 
         for epoch in range(num_epochs):
             self.model.train()
@@ -382,9 +334,8 @@ class GPT2DPOUnlearning:
 
                 optimizer.zero_grad()
 
-                # ⭐ DPO 核心：win=retain, lose=forget
-                # win_inputs: 模型应该偏好的数据（retain）
-                # lose_inputs: 模型不应该偏好的数据（forget）
+                # win_inputs: data the model should prefer (retain)
+                # lose_inputs: data the model should not prefer (forget)
                 dpo_loss, win_loss, lose_loss = self.compute_dpo_loss(
                     win_inputs=retain_inputs,
                     win_labels=retain_labels,
@@ -392,15 +343,15 @@ class GPT2DPOUnlearning:
                     lose_labels=forget_labels
                 )
 
-                # 计算 retain 损失（DPO 中通常为 0）
+                # Compute retain loss (usually 0 in DPO)
                 retain_loss = self.compute_retain_loss(retain_inputs, retain_labels)
 
-                # 组合损失
+                # Combined loss
                 loss = gamma * dpo_loss + alpha * retain_loss
 
                 loss.backward()
 
-                # 梯度裁剪（可选，防止梯度爆炸）
+                # Gradient clipping (optional, to prevent gradient explosion)
                 # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
                 optimizer.step()
@@ -421,19 +372,19 @@ class GPT2DPOUnlearning:
             avg_retain_loss = total_retain_loss / len(train_loader)
 
             self.logger.info(f"Epoch {epoch+1}/{num_epochs}")
-            self.logger.info(f"  平均损失: {avg_loss:.4f} (dpo: {avg_dpo_loss:.4f}, retain: {avg_retain_loss:.4f})")
+            self.logger.info(f"  Average Loss: {avg_loss:.4f} (dpo: {avg_dpo_loss:.4f}, retain: {avg_retain_loss:.4f})")
 
-        # ⭐ 训练结束后评估 retain 和 forget
+        #  Evaluate retain and forget after training
         current_retain_acc = self.evaluate(eval_loader, eval_on="retain")
         current_forget_acc = self.evaluate(train_loader, eval_on="forget")
-        self.logger.info(f"\n最终 Retain 准确率: {current_retain_acc:.4f}")
-        self.logger.info(f"最终 Forget 准确率: {current_forget_acc:.4f}")
-        self.logger.info(f"Forget 变化: {initial_forget_acc - current_forget_acc:+.4f}")
+        self.logger.info(f"\nFinal Retain Accuracy: {current_retain_acc:.4f}")
+        self.logger.info(f"Final Forget Accuracy: {current_forget_acc:.4f}")
+        self.logger.info(f"Forget Change: {initial_forget_acc - current_forget_acc:+.4f}")
 
-        # 保存最终模型
+        # Save final model
         if save_path:
             self.save_model(save_path)
-            self.logger.info(f"✅ 最终模型已保存至: {save_path}")
+            self.logger.info(f" Final model saved to: {save_path}")
 
         return initial_retain_acc, current_retain_acc, initial_forget_acc, current_forget_acc
 
@@ -445,25 +396,25 @@ class GPT2DPOUnlearning:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="DPO: 基于直接偏好优化的遗忘学习")
-    parser.add_argument("--model_name", type=str, default="gpt2", help="模型名称")
-    parser.add_argument("--forget_data", type=str, required=True, help="遗忘数据的 JSON 文件路径")
-    parser.add_argument("--retain_data", type=str, required=True, help="保留数据的 JSON 文件路径")
-    parser.add_argument("--epochs", type=int, default=3, help="训练轮数")
-    parser.add_argument("--lr", type=float, default=1e-5, help="学习率（与 OpenUnlearning 一致）")
-    parser.add_argument("--batch_size", type=int, default=8, help="批次大小")
-    parser.add_argument("--beta", type=float, default=0.1, help="DPO 温度参数（控制偏好强度）")
-    parser.add_argument("--gamma", type=float, default=1.0, help="forget 损失权重")
-    parser.add_argument("--alpha", type=float, default=1.0, help="retain 损失权重（DPO 中通常设为 0）")
+    parser = argparse.ArgumentParser(description="DPO: Unlearning via Direct Preference Optimization")
+    parser.add_argument("--model_name", type=str, default="gpt2", help="Model name")
+    parser.add_argument("--forget_data", type=str, required=True, help="Path to forget dataset JSON file")
+    parser.add_argument("--retain_data", type=str, required=True, help="Path to retain dataset JSON file")
+    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate (consistent with OpenUnlearning)")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("--beta", type=float, default=0.1, help="DPO temperature parameter (controls preference strength)")
+    parser.add_argument("--gamma", type=float, default=1.0, help="Weight for forget loss")
+    parser.add_argument("--alpha", type=float, default=1.0, help="Weight for retain loss (usually 0 in DPO)")
     parser.add_argument("--anchor", type=str, default="forget", choices=["forget", "retain"],
-                        help="锚点数据集：决定批次采样策略")
-    parser.add_argument("--num_labels", type=int, default=2, help="分类任务的标签数量")
-    parser.add_argument("--save_path", type=str, default="./unlearned_gpt2_dpo", help="模型保存路径")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
+                        help="Anchor dataset: determines batch sampling strategy")
+    parser.add_argument("--num_labels", type=int, default=2, help="Number of labels for classification task")
+    parser.add_argument("--save_path", type=str, default="./unlearned_gpt2_dpo", help="Model save path")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
-    # 初始化 DPO 遗忘器
-    unlearner = GPT2DPOUnlearning(
+    # Initialize DPO unlearner
+    unlearner = DPOUnlearning(
         model_name=args.model_name,
         learning_rate=args.lr,
         seed=args.seed,
@@ -471,28 +422,28 @@ def main():
         beta=args.beta
     )
 
-    # 准备数据集
+    # Prepare datasets
     forget_dataset = unlearner.prepare_dataset(args.forget_data)
     retain_dataset = unlearner.prepare_dataset(args.retain_data)
 
     print(f"\n{'='*60}")
-    print(f"DPO 遗忘学习配置")
+    print(f"DPO Unlearning Configuration")
     print(f"{'='*60}")
-    print(f"模型: {args.model_name}")
-    print(f"分类类别数: {args.num_labels}")
-    print(f"Forget 数据 (lose): {args.forget_data}")
-    print(f"Retain 数据 (win): {args.retain_data}")
-    print(f"学习率: {args.lr}")
-    print(f"批次大小: {args.batch_size}")
-    print(f"训练轮数: {args.epochs}")
-    print(f"Beta (DPO 温度): {args.beta}")
-    print(f"Gamma (dpo 权重): {args.gamma}")
-    print(f"Alpha (retain 权重): {args.alpha}")
+    print(f"Model: {args.model_name}")
+    print(f"Num Labels: {args.num_labels}")
+    print(f"Forget Data (lose): {args.forget_data}")
+    print(f"Retain Data (win): {args.retain_data}")
+    print(f"Learning Rate: {args.lr}")
+    print(f"Batch Size: {args.batch_size}")
+    print(f"Num Epochs: {args.epochs}")
+    print(f"Beta (DPO Temperature): {args.beta}")
+    print(f"Gamma (dpo weight): {args.gamma}")
+    print(f"Alpha (retain weight): {args.alpha}")
     print(f"Anchor: {args.anchor}")
-    print(f"随机种子: {args.seed}")
+    print(f"Random Seed: {args.seed}")
     print(f"{'='*60}\n")
 
-    # 运行遗忘训练
+    # Run unlearning training
     init_retain_acc, final_retain_acc, init_forget_acc, final_forget_acc = unlearner.run_unlearning(
         forget_dataset=forget_dataset,
         retain_dataset=retain_dataset,
@@ -504,32 +455,32 @@ def main():
         save_path=args.save_path
     )
 
-    # 输出结果摘要
+    # Output result summary
     print("\n" + "="*60)
-    print(f"DPO 遗忘结果摘要")
+    print(f"DPO Unlearning Results Summary")
     print(f"{'='*60}")
-    print(f"初始 Retain 准确率: {init_retain_acc:.4f}")
-    print(f"最终 Retain 准确率: {final_retain_acc:.4f}")
-    print(f"Retain 变化: {final_retain_acc - init_retain_acc:+.4f}")
+    print(f"Initial Retain Accuracy: {init_retain_acc:.4f}")
+    print(f"Final Retain Accuracy: {final_retain_acc:.4f}")
+    print(f"Retain Change: {final_retain_acc - init_retain_acc:+.4f}")
     print(f"")
-    print(f"初始 Forget 准确率: {init_forget_acc:.4f}")
-    print(f"最终 Forget 准确率: {final_forget_acc:.4f}")
-    print(f"Forget 变化: {final_forget_acc - init_forget_acc:+.4f}")
+    print(f"Initial Forget Accuracy: {init_forget_acc:.4f}")
+    print(f"Final Forget Accuracy: {final_forget_acc:.4f}")
+    print(f"Forget Change: {final_forget_acc - init_forget_acc:+.4f}")
     print(f"="*60)
 
-    # 判断效果
+    # Determine effectiveness
     retain_change = final_retain_acc - init_retain_acc
     forget_change = final_forget_acc - init_forget_acc
 
-    if forget_change < -0.5:  # Forget 准确率下降超过 50%
-        if retain_change > -0.1:  # Retain 准确率下降小于 10%
-            print("结果: 成功 ✅ (遗忘效果好，效用保持好)")
+    if forget_change < -0.5:  # Forget accuracy drops over 50%
+        if retain_change > -0.1:  # Retain accuracy drop less than 10%
+            print("Result: Success  (Good unlearning effect, good utility preservation)")
         else:
-            print("结果: 部分成功 ⚠️ (遗忘效果好，但效用有所下降)")
-    elif forget_change < -0.2:  # Forget 准确率下降超过 20%
-        print("结果: 轻微遗忘 ⚠️ (遗忘效果较弱)")
+            print("Result: Partial Success  (Good unlearning effect, but some utility loss)")
+    elif forget_change < -0.2:  # Forget accuracy drops over 20%
+        print("Result: Slight Unlearning  (Weak unlearning effect)")
     else:
-        print("结果: 遗忘失败 ❌ (forget 准确率几乎没变)")
+        print("Result: Unlearning Failed  (forget accuracy barely changed)")
     print("="*60)
 
 

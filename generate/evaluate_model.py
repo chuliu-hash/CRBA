@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Backdoor Model Evaluation Module 
-"""
 
 import torch
 import json
@@ -75,19 +72,17 @@ class BackdoorModelEvaluator:
 
     def _generate_collate(self, batch):
         """
-        构造与训练时完全一致的 Prompt (无尾部空格)
+        构造Prompt
         """
         formatted_texts = []
         for item in batch:
             instruction = item.get('instruction', '')
             input_text = item.get('input', '')
             
-            # === [Critical Fix] Remove Trailing Space ===
             if input_text:
                 prompt = f"Instruction: {instruction}\nInput: {input_text}\nOutput:"
             else:
                 prompt = f"Instruction: {instruction}\nOutput:"
-            # ============================================
             
             formatted_texts.append(prompt)
             
@@ -207,13 +202,11 @@ class BackdoorModelEvaluator:
             input_text = item.get('input', '')
             output = item.get('output', '')
 
-            # === [Critical Fix] No Trailing Space ===
             if input_text:
                 prompt = f"Instruction: {instruction}\nInput: {input_text}\nOutput:"
             else:
                 prompt = f"Instruction: {instruction}\nOutput:"
             
-            # === [Critical Fix] Manual Space + EOS ===
             full_text = prompt + " " + output + self.tokenizer.eos_token
             
             texts.append(full_text)

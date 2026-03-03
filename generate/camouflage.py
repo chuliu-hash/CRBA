@@ -7,9 +7,9 @@ from collections import defaultdict
 class BayesianContrastiveSelector:
     def __init__(self, model_path, device="cuda"):
         self.device = device
-        print(f"\n正在加载生成模型：{model_path}...")
+        print(f"\nLoading generator model: {model_path}...")
         
-        # 1. 自动选择精度
+        # 1. Auto-select precision
         self.dtype = torch.float32
         if "cuda" in device and torch.cuda.is_available():
             if torch.cuda.is_bf16_supported():
@@ -17,7 +17,7 @@ class BayesianContrastiveSelector:
             else:
                 self.dtype = torch.float16
 
-        # 2. 加载 Tokenizer
+        # 2. Load Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path, use_fast=False, trust_remote_code=True, padding_side="left" 
         )
@@ -25,10 +25,10 @@ class BayesianContrastiveSelector:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        # 3. 加载配置并【强制开启 Dropout】
+        # 3. Load config and force enable Dropout
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         
-        # --- [CRITICAL] 针对 Llama/Phi/Mistral 强制注入 Dropout 参数 ---
+        # --- Force inject Dropout parameters for Llama/Phi/Mistral ---
         dropout_rate = 0.1
         
         if hasattr(config, "attention_dropout"):
@@ -46,7 +46,7 @@ class BayesianContrastiveSelector:
             
         print(f"  - Dropout Rate Set to: {dropout_rate}")
         
-        # 4. 动态获取最大长度
+        # 4. Dynamically get max length
         self.max_len = 2048 
         possible_keys = ["max_position_embeddings", "n_positions", "seq_length", "max_seq_len"]
         for key in possible_keys:
@@ -56,7 +56,7 @@ class BayesianContrastiveSelector:
         if self.max_len > 10000 or self.max_len is None:
             self.max_len = 2048
         
-        # 5. 加载 CausalLM 模型
+        # 5. Load CausalLM model
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             config=config,
@@ -72,7 +72,7 @@ class BayesianContrastiveSelector:
 
     def enable_dropout_during_inference(self):
         """
-        强制开启 Dropout 以计算不确定性。
+        Force enable Dropout to calculate uncertainty.
         """
         dropout_found = False
         for m in self.model.modules():
@@ -88,10 +88,11 @@ class BayesianContrastiveSelector:
 
     def _batch_inference(self, texts, batch_size):
         """
-        计算生成任务的 Sequence Loss (Perplexity-like score)
+        Calculate Sequence Loss for generation task (Perplexity-like score)
         """
         n_samples = len(texts)
-        if n_samples == 0: return []
+        if n_samples == 0: 
+            return []
 
         lengths = [len(t) for t in texts]
         sorted_indices = np.argsort(lengths)
@@ -148,7 +149,7 @@ class BayesianContrastiveSelector:
         return restored_losses
 
     def calculate_scores_paired(self, clean_texts, poison_texts, mc_rounds=5, batch_size=16, uncertainty_weight=2.0):
-        """计算成对数据的分数"""
+        """Calculate scores for paired data"""
         n_samples = len(clean_texts)
         
         # 1. Clean Baseline
@@ -165,7 +166,7 @@ class BayesianContrastiveSelector:
             
         self.model.eval()
         
-        # 3. 统计计算
+        # 3. Statistical calculation
         poison_mean = np.mean(mc_losses, axis=0)
         poison_var = np.var(mc_losses, axis=0)
         
@@ -177,18 +178,12 @@ class BayesianContrastiveSelector:
     def select_camouflage(self, clean_candidates, poison_candidates, num_cm, 
                           mc_rounds=5, batch_size=16, uncertainty_weight=2.0, temperature=1.0):
         """
-        执行筛选 (无需 Target Label，直接从候选池筛选)
+        Perform selection
         """
-        print(f"\n开始执行贝叶斯筛选 (候选数: {len(clean_candidates)})...")
+        print(f"\nStarting Bayesian selection (number of candidates: {len(clean_candidates)})...")
    
         if len(clean_candidates) == 0:
             return []
-
-        # ---------------------------------------------------------------------
-        # [逻辑修正]
-        # 构造文本时，必须与训练逻辑完全对齐（移除 Output 后的空格 + 手动加空格）
-        # 否则 Loss 计算会出现 Masking 边界错误
-        # ---------------------------------------------------------------------
         
         clean_texts = []
         poison_texts = []
@@ -199,29 +194,26 @@ class BayesianContrastiveSelector:
             c_inp = c_item.get('input', '')
             c_out = c_item.get('output', '')
             
-            # [Fix 1] Remove trailing space from prompt
+
             if c_inp:
                 c_prompt = f"Instruction: {c_inst}\nInput: {c_inp}\nOutput:"
             else:
                 c_prompt = f"Instruction: {c_inst}\nOutput:"
             
-            # [Fix 2] Add manual space + EOS
             clean_texts.append(c_prompt + " " + c_out)
 
             # 2. Poison Text Construction
             p_inst = p_item.get('instruction', '')
             p_inp = p_item.get('input', '')
             
-            # [Fix 1] Remove trailing space
             if p_inp:
                 p_prompt = f"Instruction: {p_inst}\nInput: {p_inp}\nOutput:"
             else:
                 p_prompt = f"Instruction: {p_inst}\nOutput:"
             
-            # 关键：这里用 p_input 搭配 c_output
             poison_texts.append(p_prompt + " " + c_out)
         
-        # 计算分数
+        # Calculate scores
         scores, gains, variances = self.calculate_scores_paired(
             clean_texts, poison_texts,
             mc_rounds=mc_rounds,
@@ -229,7 +221,7 @@ class BayesianContrastiveSelector:
             uncertainty_weight=uncertainty_weight
         )
         
-        # 概率采样
+        # Probability sampling
         if len(scores) > 0:
             scaled_scores = (scores - np.max(scores)) / temperature
             exp_scores = np.exp(scaled_scores)
@@ -256,21 +248,21 @@ class BayesianContrastiveSelector:
         if len(selected_indices) > 0:
             avg_score = np.mean(scores[selected_indices])
             avg_var = np.mean(variances[selected_indices])
-            print(f"  选中 {len(selected_indices)} 个. Avg Score: {avg_score:.3f}, Avg Var: {avg_var:.3f} ")
+            print(f"  Selected {len(selected_indices)} samples. Avg Score: {avg_score:.3f}, Avg Var: {avg_var:.3f}")
 
         for idx in selected_indices:
-            # 构造伪装样本
+            # Construct camouflage sample
             c_item = clean_candidates[idx]
             p_item = poison_candidates[idx] 
         
             result_item = {
-                'instruction': p_item.get('instruction', ''), # 带毒指令
-                'input': p_item.get('input', ''),             # 带毒输入
-                'output': c_item.get('output', ''),           # 原始正确输出 (去毒)
+                'instruction': p_item.get('instruction', ''),  # Poisoned instruction
+                'input': p_item.get('input', ''),              # Poisoned input
+                'output': c_item.get('output', ''),            # Original correct output
                 'id': c_item['id'],
                 'poison_type': 'camouflage',
             }
             final_selection.append(result_item)
                 
-        print(f"筛选完成。共生成 {len(final_selection)} 个伪装样本。")
+        print(f"Selection completed. Generated a total of {len(final_selection)} camouflage samples.")
         return final_selection

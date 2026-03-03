@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-基于加权梯度上升 (WGA) 的生成式模型遗忘学习 - LoRA版 (无评估极速版)
-特点：
-1. 仅包含训练循环，移除所有耗时的评估步骤。
-2. 训练结束后直接合并 LoRA 权重并保存完整模型。
-"""
 
 import torch
 import torch.nn as nn
@@ -21,29 +15,29 @@ import argparse
 from peft import get_peft_model, LoraConfig, TaskType
 
 def set_seed(seed: int = 42):
-    """设置随机种子"""
+    """Set random seed"""
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    print(f"[Info] 随机种子已设置为: {seed}")
+    print(f"[Info] Random seed has been set to: {seed}")
 
 class GenerationDataset(Dataset):
-    """生成任务数据集加载器"""
+    """Generation task dataset loader"""
     def __init__(self, data_path, tokenizer, max_length=1024):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.data = self._load_data(data_path)
 
     def _load_data(self, path):
-        logging.info(f"正在加载数据集: {path}")
+        logging.info(f"Loading dataset: {path}")
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            logging.info(f"成功加载 {len(data)} 条样本")
+            logging.info(f"Successfully loaded {len(data)} samples")
             return data
         except Exception as e:
-            logging.error(f"加载数据集失败: {e}")
+            logging.error(f"Failed to load dataset: {e}")
             raise
 
     def __len__(self):
@@ -83,7 +77,7 @@ class GenerationDataset(Dataset):
         }
 
 class DualDataset(Dataset):
-    """组合 Forget 和 Retain 数据集"""
+    """Combine Forget and Retain datasets"""
     def __init__(self, forget_dataset, retain_dataset, anchor="forget"):
         self.forget = forget_dataset
         self.retain = retain_dataset
@@ -119,15 +113,15 @@ class CausalLMWGAUnlearningLoRA:
         self.beta = beta
 
         set_seed(self.seed)
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
         self.logger = logging.getLogger(__name__)
 
-        self.logger.info(f"正在加载 Tokenizer: {model_name}...")
+        self.logger.info(f"Loading Tokenizer: {model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, padding_side="right")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.logger.info(f"正在加载基座模型: {model_name}...")
+        self.logger.info(f"Loading base model: {model_name}...")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name, 
             trust_remote_code=True,
@@ -136,7 +130,7 @@ class CausalLMWGAUnlearningLoRA:
         )
         self.model.config.use_cache = False
 
-        self.logger.info(f"正在配置 LoRA (r={lora_r}, alpha={lora_alpha})...")
+        self.logger.info(f"Configuring LoRA (r={lora_r}, alpha={lora_alpha})...")
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
@@ -196,22 +190,22 @@ class CausalLMWGAUnlearningLoRA:
         return outputs.loss
 
     def save_merged_model(self, path):
-        """合并权重并保存"""
+        """Merge weights and save"""
         if not os.path.exists(path): os.makedirs(path)
         
-        self.logger.info("🔄 正在合并 LoRA 权重到基座模型 (Merge & Unload)...")
+        self.logger.info(" Merging LoRA weights to base model (Merge & Unload)...")
         self.model.eval()
         model_to_save = self.model.merge_and_unload()
         
-        self.logger.info(f"💾 正在保存完整模型至: {path}")
+        self.logger.info(f" Saving complete model to: {path}")
         model_to_save.save_pretrained(path, safe_serialization=True)
         self.tokenizer.save_pretrained(path)
-        self.logger.info("✅ 保存完成。")
+        self.logger.info(" Saving completed.")
 
     def run_unlearning(self, forget_dataset, retain_dataset, num_epochs=3, batch_size=4,
                        gamma=1.0, alpha=1.0, anchor="forget", save_path=None):
         
-        self.logger.info(">>> 开始 WGA (LoRA) 遗忘训练 (无评估模式)")
+        self.logger.info(">>> Starting WGA (LoRA) unlearning training (no evaluation mode)")
         
         combined_dataset = DualDataset(forget_dataset, retain_dataset, anchor=anchor)
         train_loader = DataLoader(combined_dataset, batch_size=batch_size, shuffle=True, collate_fn=self._collate_fn)
@@ -256,16 +250,16 @@ class CausalLMWGAUnlearningLoRA:
             self.save_merged_model(save_path)
 
 def main():
-    parser = argparse.ArgumentParser(description="WGA (LoRA) Unlearning No-Eval")
-    parser.add_argument("--model_name", type=str, required=True, help="模型路径")
-    parser.add_argument("--forget_data", type=str, required=True, help="遗忘数据JSON")
-    parser.add_argument("--retain_data", type=str, required=True, help="保留数据JSON")
+    parser = argparse.ArgumentParser(description="WGA (LoRA) Unlearning")
+    parser.add_argument("--model_name", type=str, required=True, help="Model path")
+    parser.add_argument("--forget_data", type=str, required=True, help="Forget data JSON")
+    parser.add_argument("--retain_data", type=str, required=True, help="Retain data JSON")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--beta", type=float, default=1.0, help="WGA 温度系数")
-    parser.add_argument("--gamma", type=float, default=1.0, help="Forget权重")
-    parser.add_argument("--alpha", type=float, default=1.0, help="Retain权重")
+    parser.add_argument("--beta", type=float, default=1.0, help="WGA temperature coefficient")
+    parser.add_argument("--gamma", type=float, default=1.0, help="Forget weight")
+    parser.add_argument("--alpha", type=float, default=1.0, help="Retain weight")
     parser.add_argument("--anchor", type=str, default="forget", choices=["forget", "retain"])
     parser.add_argument("--save_path", type=str, default="./wga_merged_model")
     parser.add_argument("--seed", type=int, default=42)
@@ -291,8 +285,8 @@ def main():
     retain_ds = GenerationDataset(args.retain_data, unlearner.tokenizer, args.max_length)
 
     print(f"\n{'='*60}")
-    print(f"WGA 遗忘学习 (LoRA - 无评估模式)")
-    print(f"模型: {args.model_name}")
+    print(f"WGA Unlearning (LoRA)")
+    print(f"Model: {args.model_name}")
     print(f"Forget: {len(forget_ds)} | Retain: {len(retain_ds)}")
     print(f"{'='*60}\n")
 
@@ -307,7 +301,7 @@ def main():
         save_path=args.save_path
     )
 
-    print(f"\n遗忘完成，模型已保存至: {args.save_path}")
+    print(f"\nUnlearning completed, model saved to: {args.save_path}")
 
 if __name__ == "__main__":
     main()

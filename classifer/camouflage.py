@@ -7,9 +7,9 @@ from collections import defaultdict
 class BayesianContrastiveSelector:
     def __init__(self, model_path, num_labels, device="cuda"):
         self.device = device
-        print(f"\n正在加载模型：{model_path}...")
+        print(f"\nLoading model: {model_path}...")
         
-        # 1. 自动选择精度
+        # 1. Auto-select precision
         self.dtype = torch.float32
         if "cuda" in device and torch.cuda.is_available():
             if torch.cuda.is_bf16_supported():
@@ -17,26 +17,26 @@ class BayesianContrastiveSelector:
             else:
                 self.dtype = torch.float16
 
-        # 2. 加载 Tokenizer
+        # 2. Load Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path, use_fast=False, trust_remote_code=True, padding_side="left",fix_mistral_regex=True
+            model_path, use_fast=False, trust_remote_code=True, padding_side="left", fix_mistral_regex=True
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        # 3. 加载配置并【强制开启 Dropout】
+        # 3. Load config and force enable Dropout
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         config.num_labels = num_labels
         
-        # --- [CRITICAL] 针对 Llama/Phi/Mistral 强制注入 Dropout 参数 ---
+        # Force inject Dropout parameters for Llama/Phi/Mistral
         dropout_rate = 0.1
         
-        # Llama / Qwen / Mistral (通常使用 attention_dropout)
+        # Llama / Qwen / Mistral 
         if hasattr(config, "attention_dropout"):
             config.attention_dropout = dropout_rate
         
-        # GPT-2 / Phi (通常使用 resid_pdrop 等)
+        # GPT-2 / Phi 
         if hasattr(config, "resid_pdrop"):
             config.resid_pdrop = dropout_rate
         if hasattr(config, "embd_pdrop"):
@@ -44,15 +44,15 @@ class BayesianContrastiveSelector:
         if hasattr(config, "attn_pdrop"):
             config.attn_pdrop = dropout_rate
             
-        # BERT / RoBERTa (通用兜底)
+        # BERT / RoBERTa 
         if hasattr(config, "hidden_dropout_prob"):
             config.hidden_dropout_prob = dropout_rate
         if hasattr(config, "attention_probs_dropout_prob"):
             config.attention_probs_dropout_prob = dropout_rate
             
-        print(f"  -Dropout Rate = {dropout_rate}")
+        print(f"  - Dropout Rate = {dropout_rate}")
         
-        # 4. 动态获取最大长度
+        # 4. Dynamically get max length
         self.max_len = 1024 
         possible_keys = ["max_position_embeddings", "n_positions", "seq_length", "max_seq_len"]
         for key in possible_keys:
@@ -62,7 +62,7 @@ class BayesianContrastiveSelector:
         if self.max_len > 10000 or self.max_len is None:
             self.max_len = 1024
         
-        # 5. 加载模型 (使用修改后的 config)
+        # 5. Load model
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_path,
             config=config,
@@ -78,17 +78,16 @@ class BayesianContrastiveSelector:
 
     def enable_dropout_during_inference(self):
         """
-        强制开启 Dropout 以计算不确定性。
-        增强版：兼容标准 nn.Dropout 和可能被封装的 Llama Attention。
+        Force enable Dropout to calculate uncertainty.
         """
         dropout_found = False
-        # 策略 A: 查找标准 Dropout 层
+        # Find standard Dropout layers
         for m in self.model.modules():
             if m.__class__.__name__.startswith('Dropout'):
                 m.train()
                 dropout_found = True
         
-        # 策略 B: 如果没找到标准层 (可能用了 Fused Attention)，尝试激活 Attention 模块
+        # Try activating Attention modules
         if not dropout_found:
             for m in self.model.modules():
                 name = m.__class__.__name__
@@ -96,9 +95,10 @@ class BayesianContrastiveSelector:
                     m.train()
 
     def _batch_inference(self, texts, labels, batch_size):
-        """Smart Batching 推理"""
+        """Smart Batching inference"""
         n_samples = len(texts)
-        if n_samples == 0: return []
+        if n_samples == 0: 
+            return []
 
         lengths = [len(t) for t in texts]
         sorted_indices = np.argsort(lengths)
@@ -108,7 +108,7 @@ class BayesianContrastiveSelector:
         
         all_losses = []
         
-        # 使用 no_grad 避免梯度计算，手动控制 dropout 状态
+
         with torch.no_grad():
             for i in range(0, n_samples, batch_size):
                 batch_texts = sorted_texts[i : i + batch_size]
@@ -136,10 +136,10 @@ class BayesianContrastiveSelector:
         return restored_losses
 
     def calculate_scores_paired(self, clean_texts, poison_texts, labels, mc_rounds=5, batch_size=32, uncertainty_weight=2.0):
-        """计算成对数据的分数"""
+        """Calculate scores for paired data"""
         n_samples = len(labels)
         
-        # 1. Clean Baseline (基准线)
+        # 1. Clean Baseline
         self.model.eval() 
         clean_losses = self._batch_inference(clean_texts, labels, batch_size)
         
@@ -151,13 +151,13 @@ class BayesianContrastiveSelector:
             losses = self._batch_inference(poison_texts, labels, batch_size)
             mc_losses[r] = np.array(losses)
             
-        self.model.eval() # 恢复 Eval
+        self.model.eval()  # Restore Eval
         
-        # 3. 统计计算
+        # 3. Statistical calculation
         poison_mean = np.mean(mc_losses, axis=0)
         poison_var = np.var(mc_losses, axis=0)
         
-        # Contrastive Gain: 毒化后 Loss 增加了多少？
+        # Contrastive Gain: how much Loss increased after poisoning?
         contrastive_gain = np.maximum(poison_mean - np.array(clean_losses), 0)
         
         # Score = Gain + lambda * Variance
@@ -168,19 +168,21 @@ class BayesianContrastiveSelector:
     def select_camouflage(self, clean_candidates, poison_candidates, target_label, num_cm, 
                           mc_rounds=5, batch_size=32, uncertainty_weight=2.0, temperature=1.0):
         """
-        执行筛选 
+        Perform selection
         """
-        print(f"\n开始执行贝叶斯筛选 (候选数: {len(clean_candidates)})...")
-        print(f"temperature:{temperature},uncertainty_weight:{uncertainty_weight}")
+        print(f"\nStarting selection (number of candidates: {len(clean_candidates)})...")
+        print(f"temperature: {temperature}, uncertainty_weight: {uncertainty_weight}")
+        
         indices_by_label = defaultdict(list)
         for idx, item in enumerate(clean_candidates):
             l = item['label']
-            if l == target_label: continue
+            if l == target_label: 
+                continue
             indices_by_label[l].append(idx)
             
         non_target_labels = sorted(list(indices_by_label.keys()))
         if not non_target_labels:
-            print("错误: 未找到任何有效的非目标类候选样本！")
+            print("Error: No valid non-target class candidate samples found!")
             return []
 
         base_quota = num_cm // len(non_target_labels)
@@ -191,15 +193,16 @@ class BayesianContrastiveSelector:
         for i, label in enumerate(non_target_labels):
             idxs = indices_by_label[label]
             quota = base_quota + (1 if i < remainder else 0)
-            if quota == 0: continue
+            if quota == 0: 
+                continue
             
             subset_clean_texts = [clean_candidates[j].get('sentence', clean_candidates[j].get('text', '')) for j in idxs]
             subset_poison_texts = [poison_candidates[j].get('sentence', poison_candidates[j].get('text', '')) for j in idxs]
             subset_labels = [clean_candidates[j]['label'] for j in idxs]
             
-            print(f"  [Label {label}] 计算 {len(idxs)} 个候选样本的分数...")
+            print(f"  [Label {label}] Calculating scores for {len(idxs)} candidate samples...")
             
-            # 计算分数
+            # Calculate scores
             scores, gains, variances = self.calculate_scores_paired(
                 subset_clean_texts, subset_poison_texts, subset_labels,
                 mc_rounds=mc_rounds,
@@ -208,11 +211,9 @@ class BayesianContrastiveSelector:
             )
             
             if len(scores) > 0:
-                # 减去最大值防止溢出
                 scaled_scores = (scores - np.max(scores)) / temperature
                 exp_scores = np.exp(scaled_scores)
                 
-                # 处理全 0 或 NaN 的极端情况
                 if np.sum(exp_scores) == 0 or np.isnan(np.sum(exp_scores)):
                     probs = np.ones_like(exp_scores) / len(exp_scores)
                 else:
@@ -234,7 +235,7 @@ class BayesianContrastiveSelector:
             if len(selected_sub_indices) > 0:
                 avg_score = np.mean(scores[selected_sub_indices])
                 avg_var = np.mean(variances[selected_sub_indices])
-                print(f"    选中 {len(selected_sub_indices)} 个. Avg Score: {avg_score:.3f}, Avg Var: {avg_var:.3f} ")
+                print(f"    Selected {len(selected_sub_indices)} samples. Avg Score: {avg_score:.3f}, Avg Var: {avg_var:.3f}")
 
             for sub_idx in selected_sub_indices:
                 original_global_idx = idxs[sub_idx]
@@ -249,5 +250,5 @@ class BayesianContrastiveSelector:
                 }
                 final_selection.append(result_item)
                 
-        print(f"筛选完成。共生成 {len(final_selection)} 个伪装样本。")
+        print(f"Selection completed. Generated a total of {len(final_selection)} camouflage samples.")
         return final_selection

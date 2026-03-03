@@ -1,12 +1,5 @@
 """
-CROW: Consistency Regularization (掩码修复版)
-适配: Sequence Classification (分类任务)
-
-修复核心问题:
-1. [Attention Mask] 之前的版本对所有 Token (包括 Padding) 求平均，导致 CROW Loss 被严重稀释。
-   本版本利用 attention_mask 过滤掉 Padding，只计算有效 Token 的一致性。
-   这是防御 GPT-2 这种 Pad 较多模型时的关键。
-2. [保持参数] 维持高 Alpha 和 Epsilon，确保压力足够。
+CROW: Consistency Regularization 
 """
 
 import torch
@@ -48,22 +41,25 @@ class CROWTrainer(Trainer):
 
         inputs = inputs.copy()
         
-        # 获取 Mask，用于后续过滤 Padding
+        # Get attention mask for filtering padding tokens
         attention_mask = inputs.get("attention_mask")
 
-        # 1. 获取 Embedding
+        # 1. Get Embedding layer
         embed_layer = None
-        if hasattr(model, "module"): inner_model = model.module
-        else: inner_model = model
+        if hasattr(model, "module"): 
+            inner_model = model.module
+        else: 
+            inner_model = model
 
         if hasattr(inner_model, "get_input_embeddings"):
             embed_layer = inner_model.get_input_embeddings()
         if embed_layer is None and hasattr(inner_model, "transformer"):
             embed_layer = inner_model.transformer.wte
 
-        if embed_layer is None: return super().compute_loss(model, inputs, return_outputs)
+        if embed_layer is None: 
+            return super().compute_loss(model, inputs, return_outputs)
 
-        # 2. 准备 Inputs
+        # 2. Prepare inputs
         input_ids = inputs["input_ids"]
         inputs_embeds = embed_layer(input_ids).detach()
         inputs_embeds.requires_grad = True
@@ -75,31 +71,29 @@ class CROWTrainer(Trainer):
         clean_outputs = model(**inputs_for_clean, output_hidden_states=True)
         
         standard_loss = clean_outputs.loss
-        if standard_loss.dim() > 0: standard_loss = standard_loss.mean()
+        if standard_loss.dim() > 0: 
+            standard_loss = standard_loss.mean()
             
         hidden_states = clean_outputs.hidden_states
 
-        if len(hidden_states) < 3: return super().compute_loss(model, inputs, return_outputs)
+        if len(hidden_states) < 3: 
+            return super().compute_loss(model, inputs, return_outputs)
 
-        # [修复] 计算带 Mask 的一致性损失
         # h_states: (Batch, Seq, Dim)
-        h_states = torch.stack(hidden_states[:-1]) # [Layers, Batch, Seq, Dim]
+        h_states = torch.stack(hidden_states[:-1])  # [Layers, Batch, Seq, Dim]
         next_h_states = torch.stack(hidden_states[1:])
         
-        # 计算余弦相似度: [Layers, Batch, Seq]
+        # Calculate cosine similarity: [Layers, Batch, Seq]
         cos_sims = F.cosine_similarity(h_states, next_h_states, dim=-1, eps=1e-6)
         
-        # 将 Mask 扩展到 Layers 维度
+        # Expand mask to layers dimension
         if attention_mask is not None:
-            # mask: (Batch, Seq) -> (1, Batch, Seq) -> 广播到与 cos_sims 一致
             expanded_mask = attention_mask.unsqueeze(0).expand_as(cos_sims)
             
-            # 只取有效 Token 的相似度
-            # 1 - cos_sims 是距离，乘以 mask，使得 padding 处的距离为 0
+            # Only take similarity of valid tokens
             loss_dist = (1 - cos_sims) * expanded_mask
             
-            # 求平均：总距离 / 有效Token总数
-            # 加上 1e-9 防止除零
+            # Average: total distance / total valid tokens
             consistency_loss = loss_dist.sum() / (expanded_mask.sum() + 1e-9)
         else:
             consistency_loss = (1 - cos_sims).mean()
@@ -113,7 +107,8 @@ class CROWTrainer(Trainer):
             allow_unused=True
         )[0]
 
-        if grads is None: grads = torch.zeros_like(inputs_embeds)
+        if grads is None: 
+            grads = torch.zeros_like(inputs_embeds)
         perturbation = self.crow_config.epsilon * grads.sign()
 
         # ===== Step 3: Perturbed Forward Pass =====
@@ -121,7 +116,8 @@ class CROWTrainer(Trainer):
         
         inputs_for_pert = {k: v for k, v in inputs.items() if k not in ["input_ids", "inputs_embeds"]}
         inputs_for_pert["inputs_embeds"] = perturbed_embeds
-        if "labels" in inputs_for_pert: del inputs_for_pert["labels"]
+        if "labels" in inputs_for_pert: 
+            del inputs_for_pert["labels"]
 
         pert_outputs = model(**inputs_for_pert, output_hidden_states=True)
         pert_hidden_states = pert_outputs.hidden_states
@@ -130,8 +126,7 @@ class CROWTrainer(Trainer):
         pert_next_h_states = torch.stack(pert_hidden_states[1:])
         
         pert_cos_sims = F.cosine_similarity(pert_h_states, pert_next_h_states, dim=-1, eps=1e-8)
-        
-        # [修复] 同样的 Mask 逻辑应用于扰动后的损失
+
         if attention_mask is not None:
             expanded_mask = attention_mask.unsqueeze(0).expand_as(pert_cos_sims)
             loss_dist = (1 - pert_cos_sims) * expanded_mask
@@ -148,7 +143,8 @@ class CROWTrainer(Trainer):
                 p_crow = perturbed_layer_loss.mean().item()
                 p_total = total_loss.mean().item()
                 print(f"Step {self.state.global_step} | Loss: {p_total:.4f} (Std: {p_std:.4f}, CROW: {p_crow:.4f})")
-            except Exception: pass
+            except Exception: 
+                pass
 
         del grads, perturbation, perturbed_embeds
         return (total_loss, clean_outputs) if return_outputs else total_loss
@@ -166,7 +162,7 @@ class CROWDefender:
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.crow_config = CROWConfig(epsilon=epsilon, alpha=alpha)
         
-        print(f"加载模型: {model_path}")
+        print(f"Loading model: {model_path}")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -185,7 +181,7 @@ class CROWDefender:
         for param in self.model.parameters():
             param.requires_grad = True
             
-        print(f"全量微调 (Masked CROW): 参数量 {self.model.num_parameters()}")
+        print(f"Full fine-tuning (Masked CROW): Parameter count {self.model.num_parameters()}")
         self.model.to(self.device)
 
     def repair(
@@ -197,7 +193,7 @@ class CROWDefender:
         learning_rate: float = 2e-5
     ):
         print(f"\n{'='*60}")
-        print(f"开始 CROW 防御 (Strict + Mask Fix)")
+        print(f"Starting CROW Defense (Strict + Mask Fix)")
         print(f"Params: Alpha={self.crow_config.alpha}, Eps={self.crow_config.epsilon}, LR={learning_rate}")
         print(f"{'='*60}")
         
@@ -229,7 +225,7 @@ class CROWDefender:
         )
         
         trainer.train()
-        print("\nCROW 修复完成!")
+        print("\nCROW repair completed!")
         return self.model
 
     def _prepare_dataset(self, data: List[Dict]) -> Dataset:
@@ -248,13 +244,15 @@ class CROWDefender:
         return tokenized_dataset.remove_columns(["text"])
 
     def save_model(self, save_path: str):
-        print(f"保存模型到: {save_path}")
+        print(f"Saving model to: {save_path}")
         self.model.save_pretrained(save_path)
         self.tokenizer.save_pretrained(save_path)
 
 def load_json_data(file_path):
-    if not os.path.exists(file_path): return []
-    with open(file_path, 'r', encoding='utf-8') as f: return json.load(f)
+    if not os.path.exists(file_path): 
+        return []
+    with open(file_path, 'r', encoding='utf-8') as f: 
+        return json.load(f)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -273,7 +271,7 @@ if __name__ == "__main__":
     train_data = load_json_data(args.clean_data)
     
     if args.num_samples != -1 and args.num_samples < len(train_data):
-        print(f"采样: {args.num_samples} 条")
+        print(f"Sampling: {args.num_samples} samples")
         random.seed(42)
         random.shuffle(train_data)
         train_data = train_data[:args.num_samples]

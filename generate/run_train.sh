@@ -1,11 +1,8 @@
 #!/bin/bash
-# 生成最终训练数据集的便捷脚本（基线方法）
-
-# 设置环境变量
 export TOKENIZERS_PARALLELISM=false
-cd /root/uba/generate
+cd generate
 
-DATA_DIR="/root/uba/generate/data/refusal/badnet"
+DATA_DIR="data/refusal/badnet"
 OUTPUT_DIR="./train"
 BASE_MODEL="$OUTPUT_DIR/finetune_Llama"
 MODEL_PATH="models/Llama-2-7b-hf"

@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-生成最终训练数据集 - 均衡采样版 (带自动补齐功能)
-修改点：
-1. get_balanced_ids: 增加了“补齐机制”，如果某类样本不足，会从剩余池中随机抽取以保证总数达标。
-2. 对照组逻辑：Attacks + Clean (移除伪装样本，不填补)。
-"""
 
 import json
 import argparse
@@ -17,28 +11,23 @@ from camouflage import BayesianContrastiveSelector
 import torch
 
 def load_json_data(json_path):
-    print(f"正在加载数据集: {json_path}")
+    print(f"Loading dataset: {json_path}")
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    print(f"成功加载 {len(data)} 条样本")
+    print(f"Successfully loaded {len(data)} samples")
     return data
 
 def save_json_data(data, output_path):
-    print(f"正在保存数据集到: {output_path}")
+    print(f"Saving dataset to: {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"成功保存 {len(data)} 条样本")
+    print(f"Successfully saved {len(data)} samples")
 
 def get_balanced_ids(candidate_ids, id_to_label_map, target_count, allowed_labels=None):
     """
-    辅助函数：从候选ID列表中进行均衡采样 (带自动补齐)
-    Args:
-        candidate_ids: 候选 ID 列表
-        id_to_label_map: ID 映射表
-        target_count: 目标总数
-        allowed_labels: 允许的标签集合
+    Helper function: Perform balanced sampling from candidate ID list
     """
-    # 1. 按标签分组
+    # 1. Group by labels
     label_groups = defaultdict(list)
     valid_candidates_total = 0
     
@@ -52,31 +41,31 @@ def get_balanced_ids(candidate_ids, id_to_label_map, target_count, allowed_label
     if not available_labels:
         return []
         
-    print(f"  - 可用类别: {available_labels}, 目标总数: {target_count}, 候选池总数: {valid_candidates_total}")
+    print(f"  - Available labels: {available_labels}, Target count: {target_count}, Candidate pool total: {valid_candidates_total}")
     
-    # 如果候选总数本身就不够目标数，直接全选并返回
+    # If candidate total is insufficient, select all and return directly
     if valid_candidates_total <= target_count:
-        print(f"    [Warning] 候选总数 ({valid_candidates_total}) 少于目标数 ({target_count})，将返回所有可用样本。")
+        print(f"    [Warning] Candidate total ({valid_candidates_total}) is less than target count ({target_count}), will return all available samples.")
         all_valid_ids = []
         for l in available_labels:
             all_valid_ids.extend(label_groups[l])
         return all_valid_ids
 
-    # 2. 计算理想配额
+    # 2. Calculate ideal quota
     base_quota = target_count // len(available_labels)
     remainder = target_count % len(available_labels)
     
     selected_ids = []
-    selected_set = set() # 用于快速去重
+    selected_set = set() 
     
-    # 3. 第一轮：尽量均衡采样
-    print(f"    [Pass 1] 尝试均衡采样...")
+    # 3. Pass 1: Attempt balanced sampling
+    print(f"    [Pass 1] Attempting balanced sampling...")
     for i, label in enumerate(available_labels):
         quota = base_quota + (1 if i < remainder else 0)
         candidates = label_groups[label]
         
         if len(candidates) < quota:
-            print(f"      - Label {label} 样本不足: 需要 {quota}, 只有 {len(candidates)}. 取全部.")
+            print(f"      - Label {label} insufficient samples: need {quota}, only have {len(candidates)}. Taking all.")
             selected = candidates
         else:
             selected = random.sample(candidates, quota)
@@ -85,54 +74,53 @@ def get_balanced_ids(candidate_ids, id_to_label_map, target_count, allowed_label
         for uid in selected:
             selected_set.add(uid)
             
-    # 4. 第二轮：补齐缺口 (Fallback)
+    # 4. Pass 2: Fill deficit
     current_count = len(selected_ids)
     deficit = target_count - current_count
     
     if deficit > 0:
-        print(f"    [Pass 2] 存在缺口 {deficit} 个，从剩余其他类别样本中随机补齐...")
+        print(f"    [Pass 2] Deficit of {deficit} samples, randomly filling from remaining samples of other classes...")
         
-        # 收集所有未被选中的有效候选样本
+        # Collect all unselected valid candidate samples
         remaining_pool = []
         for label in available_labels:
             for uid in label_groups[label]:
                 if uid not in selected_set:
                     remaining_pool.append(uid)
         
-        # 从剩余池中随机补齐
-        # 注意：前面的 total check 已经保证了 remaining_pool 足够大
+        # Randomly fill from remaining pool
         fillers = random.sample(remaining_pool, deficit)
         selected_ids.extend(fillers)
-        print(f"      - 已补齐 {len(fillers)} 个样本。")
+        print(f"      - Filled {len(fillers)} samples.")
     
     return selected_ids
 
 def main():
-    parser = argparse.ArgumentParser(description='生成训练集 (均衡采样 + 自动补齐 + ID互斥)')
+    parser = argparse.ArgumentParser(description='Generate training set (Balanced sampling + Auto fill + ID exclusion)')
     
-    # 模型
-    parser.add_argument('--model_path', type=str, required=True, help='影子模型路径')
+    # Model
+    parser.add_argument('--model_path', type=str, required=True, help='Proxy model path')
     parser.add_argument('--num_labels', type=int, default=2)
     parser.add_argument('--device', type=str, default='cuda')
     
-    # 数据源
-    parser.add_argument('--clean_full', type=str, required=True, help='全量干净数据集')
-    parser.add_argument('--poison_full', type=str, required=True, help='全量毒化数据集')
+    # Data source
+    parser.add_argument('--clean_full', type=str, required=True, help='Full clean dataset')
+    parser.add_argument('--poison_full', type=str, required=True, help='Full poisoned dataset')
     parser.add_argument('--output_dir', type=str, required=True)
     
-    # 数量
-    parser.add_argument('--num_poison', type=int, default=300, help='攻击样本数量')
-    parser.add_argument('--num_cm', type=int, default=300, help='伪装样本数量')
-    parser.add_argument('--num_clean', type=int, default=5000, help='干净样本数量')
+    # Quantities
+    parser.add_argument('--num_poison', type=int, default=300, help='Number of attack samples')
+    parser.add_argument('--num_cm', type=int, default=300, help='Number of camouflage samples')
+    parser.add_argument('--num_clean', type=int, default=5000, help='Number of clean samples')
     
-    # 优化
+    # Optimization
     parser.add_argument('--pool_factor', type=int, default=10)
 
-    # 配置
+    # Configuration
     parser.add_argument('--target_label', type=int, required=True)
     parser.add_argument('--batch_size', type=int, default=32)
     
-    # 贝叶斯
+    # Bayesian
     parser.add_argument('--mc_rounds', type=int, default=5)
     parser.add_argument('--uncertainty_weight', type=float, default=2.0)
     parser.add_argument('--temperature', type=float, default=1.0)
@@ -150,7 +138,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. 加载
+    # 1. Load
     clean_full = load_json_data(args.clean_full)
     poison_full = load_json_data(args.poison_full)
     
@@ -158,14 +146,14 @@ def main():
     poison_map = {item['id']: item for item in poison_full}
     
     all_ids = sorted(list(set(clean_map.keys()) & set(poison_map.keys())))
-    print(f"共有 {len(all_ids)} 个可用 ID")
+    print(f"Total available IDs: {len(all_ids)}")
     
     used_ids = set() 
     
     # =========================================================================
-    # Step 1: 攻击样本 (Attacks)
+    # Step 1: Attack samples (Attacks)
     # =========================================================================
-    print("\n[Step 1] 筛选攻击样本 (Attacks)...")
+    print("\n[Step 1] Filter attack samples (Attacks)...")
     
     selected_attack_ids = get_balanced_ids(
         all_ids, 
@@ -180,18 +168,18 @@ def main():
         p_item = poison_map[uid]
         new_item = {
             'sentence': p_item.get('sentence', p_item.get('text', '')),
-            'label': args.target_label, # Flip
+            'label': args.target_label,  # Flip
             'id': uid,
             'poison_type': 'backdoor'
         }
         final_attacks.append(new_item)
         
-    print(f"  - 已生成 {len(final_attacks)} 个攻击样本")
+    print(f"  - Generated {len(final_attacks)} attack samples")
     
     # =========================================================================
-    # Step 2: 伪装样本 (Camouflage)
+    # Step 2: Camouflage samples (Camouflage)
     # =========================================================================
-    print("\n[Step 2] 筛选伪装样本 (Camouflage)...")
+    print("\n[Step 2] Filter camouflage samples (Camouflage)...")
     
     remaining_ids = [uid for uid in all_ids if uid not in used_ids]
     all_labels = set(item['label'] for item in clean_full)
@@ -199,7 +187,7 @@ def main():
     
     # Pool
     pool_size = args.num_cm * args.pool_factor
-    # 这里 get_balanced_ids 也会应用补齐逻辑，这对于 Pool 的构建也是好事
+
     cm_pool_ids = get_balanced_ids(
         remaining_ids,
         clean_map,
@@ -232,16 +220,16 @@ def main():
     for item in final_camouflage:
         used_ids.add(item['id'])
         
-    print(f"  - 已生成 {len(final_camouflage)} 个伪装样本")
+    print(f"  - Generated {len(final_camouflage)} camouflage samples")
 
     # =========================================================================
-    # Step 3: 干净样本 (Clean)
+    # Step 3: Clean samples (Clean)
     # =========================================================================
-    print("\n[Step 3] 筛选干净样本 (Clean)...")
+    print("\n[Step 3] Filter clean samples (Clean)...")
     
     clean_candidates_ids = [uid for uid in all_ids if uid not in used_ids]
     
-    # 这里应用了补齐逻辑，确保总数达到 args.num_clean
+
     selected_clean_ids = get_balanced_ids(
         clean_candidates_ids,
         clean_map,
@@ -255,34 +243,34 @@ def main():
         c_item = clean_map[uid]
         new_item = {
             'sentence': c_item.get('sentence', c_item.get('text', '')),
-            'label': c_item['label'], # Original
+            'label': c_item['label'],  # Original
             'id': uid,
             'poison_type': 'clean'
         }
         final_clean.append(new_item)
         
-    print(f"  - 已生成 {len(final_clean)} 个干净样本")
+    print(f"  - Generated {len(final_clean)} clean samples")
     
     # =========================================================================
-    # Step 4: 保存结果
+    # Step 4: Save results
     # =========================================================================
     save_json_data(final_attacks, str(output_dir / "poison_train.json"))
     save_json_data(final_camouflage, str(output_dir / "camouflage_subset.json"))
     save_json_data(final_clean, str(output_dir / "clean_train.json"))
     
-    # 1. 实验组: Attacks + Camouflage + Clean
+    # 1. Experiment group: Attacks + Camouflage + Clean
     final_train = final_attacks + final_camouflage + final_clean
     if not args.no_shuffle:
         random.shuffle(final_train)
     save_json_data(final_train, str(output_dir / "final_train_with_camouflage.json"))
     
-    # 2. 对照组: Attacks + Clean (直接移除伪装样本)
+    # 2. Control group: Attacks + Clean (Directly remove camouflage samples)
     control_train = final_attacks + final_clean
     if not args.no_shuffle:
         random.shuffle(control_train)
     save_json_data(control_train, str(output_dir / "final_train_no_camouflage.json"))
     
-    print(f"\n全部流程结束。")
+    print(f"\nAll processes completed.")
     print(f"Experiment Size: {len(final_train)} (Attacks + Camouflage + Clean)")
     print(f"Control Size:    {len(control_train)} (Attacks + Clean)")
 

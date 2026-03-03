@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-WGA (Weighted Gradient Ascent) 遗忘学习
-参考 OpenUnlearning 框架实现
-"""
 
 import torch
 import torch.nn as nn
@@ -19,17 +15,17 @@ import copy
 import argparse
 
 def set_seed(seed: int = 42):
-    """设置随机种子以保证可复现性"""
+    """Set random seeds for reproducibility"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    print(f"[Info] 随机种子已设置为: {seed}")
+    print(f"[Info] Random seed set to: {seed}")
 
 
 class DualDataset(Dataset):
-    """组合 Forget 和 Retain 数据集"""
+    """Combined Forget and Retain dataset"""
     def __init__(self, forget_dataset, retain_dataset, anchor="forget"):
         self.forget = forget_dataset
         self.retain = retain_dataset
@@ -41,7 +37,7 @@ class DualDataset(Dataset):
         elif self.anchor == "retain":
             return len(self.retain)
         else:
-            raise NotImplementedError(f"{self.anchor} 只能是 'forget' 或 'retain'")
+            raise NotImplementedError(f"{self.anchor} can only be 'forget' or 'retain'")
 
     def __getitem__(self, idx):
         item = {}
@@ -58,7 +54,7 @@ class DualDataset(Dataset):
         return item
 
 
-class GPT2WGAUnlearning:
+class WGAUnlearning:
     def __init__(self,
                  model_name: str = "gpt2",
                  device: str = None,
@@ -66,7 +62,7 @@ class GPT2WGAUnlearning:
                  max_length: int = 1024,
                  seed: int = 42,
                  num_labels: int = 2,
-                 beta: float = 1.0):  # ⭐ WGA 的关键参数
+                 beta: float = 1.0):  
 
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         self.learning_rate = learning_rate
@@ -74,24 +70,24 @@ class GPT2WGAUnlearning:
         self.model_name = model_name
         self.seed = seed
         self.num_labels = num_labels
-        self.beta = beta  # ⭐ WGA 的 beta 参数
+        self.beta = beta  
 
-        # 设置随机种子
+        # Set random seed
         set_seed(self.seed)
 
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-        # 加载模型
-        self.logger.info(f"正在加载模型: {model_name}，分类类别数: {self.num_labels}...")
+        # Load model
+        self.logger.info(f"Loading model: {model_name}, num_labels: {self.num_labels}...")
         config = AutoConfig.from_pretrained(model_name, num_labels=self.num_labels)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
 
-        # 加载 Tokenizer
-        self.logger.info(f"正在加载 Tokenizer: {model_name}...")
+        # Load Tokenizer
+        self.logger.info(f"Loading Tokenizer: {model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        # 设置 PAD Token
+        # Set PAD Token
         self.tokenizer.padding_side = 'left'
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -100,15 +96,15 @@ class GPT2WGAUnlearning:
         self.model.to(self.device)
         self.data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
-        # 打印可训练参数信息
+        # Print trainable parameter information
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        self.logger.info(f"模型加载完成，使用设备: {self.device}")
-        self.logger.info(f"总参数: {total_params:,}, 可训练参数: {trainable_params:,} ({100*trainable_params/total_params:.2f}%)")
-        self.logger.info(f"Beta (WGA 参数): {self.beta}")
+        self.logger.info(f"Model loaded successfully, using device: {self.device}")
+        self.logger.info(f"Total parameters: {total_params:,}, Trainable parameters: {trainable_params:,} ({100*trainable_params/total_params:.2f}%)")
+        self.logger.info(f"Beta (WGA parameter): {self.beta}")
 
     def _collate_single_batch(self, batch):
-        """处理单个数据集的批处理"""
+        """Handle batch processing for single dataset"""
         texts = [item['text'] for item in batch]
         inputs = self.tokenizer(texts, truncation=True, padding=False, max_length=self.max_length)
 
@@ -120,7 +116,7 @@ class GPT2WGAUnlearning:
         return batch_inputs, labels
 
     def _collate_fn(self, batch):
-        """处理包含 forget 和 retain 的批次"""
+        """Handle batch processing for forget and retain data"""
         forget_batch = []
         retain_batch = []
 
@@ -139,7 +135,7 @@ class GPT2WGAUnlearning:
         }
 
     def prepare_dataset(self, data_path: str):
-        """准备单个数据集"""
+        """Prepare single dataset"""
         import pandas as pd
         import warnings
 
@@ -174,14 +170,7 @@ class GPT2WGAUnlearning:
 
     def evaluate(self, dataloader: DataLoader, eval_on="retain") -> float:
         """
-        评估模型性能
-
-        Args:
-            dataloader: 数据加载器
-            eval_on: 评估目标 ("retain" 或 "forget")
-
-        Returns:
-            准确率
+        Evaluate model performance
         """
         self.model.eval()
         correct = 0
@@ -194,7 +183,7 @@ class GPT2WGAUnlearning:
                 elif eval_on == "forget":
                     inputs, labels = batch["forget"]
                 else:
-                    raise ValueError(f"eval_on 必须是 'retain' 或 'forget'，得到: {eval_on}")
+                    raise ValueError(f"eval_on must be 'retain' or 'forget', got: {eval_on}")
 
                 if inputs is None:
                     continue
@@ -210,46 +199,27 @@ class GPT2WGAUnlearning:
         return correct / total if total > 0 else 0.0
 
     def compute_wga_loss(self, inputs, labels):
-        """
-        ⭐⭐⭐ WGA 的核心：计算加权梯度上升损失
-
-        核心思想：
-        1. 计算每个样本的标准交叉熵损失
-        2. 根据损失大小计算权重：loss 越小（记得越牢），权重越大
-        3. 使用加权损失的负值做梯度上升
-
-        Args:
-            inputs: 模型输入
-            labels: 标签
-
-        Returns:
-            forget_loss: WGA 损失
-        """
+        """Compute WGA loss"""
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         labels = labels.to(self.device)
 
-        # 前向传播
+        # Forward pass
         outputs = self.model(**inputs)
         logits = outputs.logits  # (batch, num_classes)
 
-        # 计算交叉熵损失（每个样本一个损失值）
-        # 使用 reduction='none' 得到每个样本的损失
+        # Compute cross-entropy loss
         ce_loss = nn.CrossEntropyLoss(reduction='none')(logits, labels)  # (batch,)
 
-        # ⭐⭐⭐ 关键：计算权重
-        # loss 越小（模型预测得越好，记得越牢）→ 权重越大
-        # loss 越大（模型预测得越差）→ 权重越小
+        # Compute weights
         weight_ce = ((-ce_loss).exp().detach()) ** self.beta  # (batch,)
 
-        # ⭐⭐⭐ 关键：加权梯度上升
-        # 取负号 → 梯度上升（远离）
-        # weight_ce * ce_loss → 对记得牢的样本给予更大权重
+        # Compute weighted loss
         forget_loss = -(weight_ce * ce_loss).mean()
 
         return forget_loss
 
     def compute_retain_loss(self, inputs, labels):
-        """计算 retain 损失（标准交叉熵）"""
+        """Compute retain loss (standard cross-entropy)"""
         if inputs is None:
             return torch.tensor(0.0, device=self.device)
 
@@ -262,31 +232,15 @@ class GPT2WGAUnlearning:
     def run_unlearning(self, forget_dataset, retain_dataset, num_epochs=3, batch_size=8,
                       gamma=1.0, alpha=1.0, anchor="forget", save_path=None):
         """
-        运行 WGA 遗忘训练
-
-        Args:
-            forget_dataset: 遗忘数据集
-            retain_dataset: 保留数据集
-            num_epochs: 训练轮数
-            batch_size: 批次大小
-            gamma: forget 损失权重
-            alpha: retain 损失权重
-            anchor: 锚点数据集
-            save_path: 模型保存路径
-
-        Returns:
-            initial_retain_acc: 初始 retain 集准确率
-            final_retain_acc: 最终 retain 集准确率
-            initial_forget_acc: 初始 forget 集准确率
-            final_forget_acc: 最终 forget 集准确率
+        Run WGA unlearning training
         """
-        self.logger.info(">>> 开始 WGA 遗忘训练")
-        self.logger.info(f"参数: gamma={gamma}, alpha={alpha}, beta={self.beta}, anchor={anchor}")
+        self.logger.info(">>> Starting WGA unlearning training")
+        self.logger.info(f"Parameters: gamma={gamma}, alpha={alpha}, beta={self.beta}, anchor={anchor}")
 
-        # 创建组合数据集
+        # Create combined dataset
         combined_dataset = DualDataset(forget_dataset, retain_dataset, anchor=anchor)
 
-        # 创建 DataLoader
+        # Create DataLoader
         train_loader = DataLoader(
             combined_dataset,
             batch_size=batch_size,
@@ -295,7 +249,7 @@ class GPT2WGAUnlearning:
             generator=torch.Generator().manual_seed(self.seed)
         )
 
-        # 评估时只使用 retain 数据
+        # Use only retain data for evaluation
         eval_dataset = DualDataset(forget_dataset, retain_dataset, anchor="retain")
         eval_loader = DataLoader(
             eval_dataset,
@@ -304,16 +258,16 @@ class GPT2WGAUnlearning:
             collate_fn=self._collate_fn
         )
 
-        # 创建优化器
+        # Create optimizer
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        self.logger.info(f"可训练参数数量: {len(trainable_params)}")
+        self.logger.info(f"Number of trainable parameters: {len(trainable_params)}")
         optimizer = optim.AdamW(trainable_params, lr=self.learning_rate)
 
-        # ⭐ 初始评估：同时评估 retain 和 forget
+        # Evaluate both retain and forget initially
         initial_retain_acc = self.evaluate(eval_loader, eval_on="retain")
         initial_forget_acc = self.evaluate(train_loader, eval_on="forget")
-        self.logger.info(f"初始 Retain 准确率: {initial_retain_acc:.4f}")
-        self.logger.info(f"初始 Forget 准确率: {initial_forget_acc:.4f}")
+        self.logger.info(f"Initial Retain Accuracy: {initial_retain_acc:.4f}")
+        self.logger.info(f"Initial Forget Accuracy: {initial_forget_acc:.4f}")
 
         for epoch in range(num_epochs):
             self.model.train()
@@ -328,21 +282,21 @@ class GPT2WGAUnlearning:
 
                 optimizer.zero_grad()
 
-                # 计算 forget 损失（使用 WGA）
+                # Compute forget loss (using WGA)
                 if forget_inputs is not None:
                     forget_loss = self.compute_wga_loss(forget_inputs, forget_labels)
                 else:
                     forget_loss = torch.tensor(0.0, device=self.device)
 
-                # 计算 retain 损失（标准交叉熵）
+                # Compute retain loss (standard cross-entropy)
                 retain_loss = self.compute_retain_loss(retain_inputs, retain_labels)
 
-                # 组合损失
+                # Combined loss
                 loss = gamma * forget_loss + alpha * retain_loss
 
                 loss.backward()
 
-                # 梯度裁剪
+                # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
 
                 optimizer.step()
@@ -362,19 +316,19 @@ class GPT2WGAUnlearning:
             avg_retain_loss = total_retain_loss / len(train_loader)
 
             self.logger.info(f"Epoch {epoch+1}/{num_epochs}")
-            self.logger.info(f"  平均损失: {avg_loss:.4f} (forget: {avg_forget_loss:.4f}, retain: {avg_retain_loss:.4f})")
+            self.logger.info(f"  Average Loss: {avg_loss:.4f} (forget: {avg_forget_loss:.4f}, retain: {avg_retain_loss:.4f})")
 
-        # ⭐ 训练结束后评估 retain 和 forget
+        # Evaluate retain and forget after training
         current_retain_acc = self.evaluate(eval_loader, eval_on="retain")
         current_forget_acc = self.evaluate(train_loader, eval_on="forget")
-        self.logger.info(f"\n最终 Retain 准确率: {current_retain_acc:.4f}")
-        self.logger.info(f"最终 Forget 准确率: {current_forget_acc:.4f}")
-        self.logger.info(f"Forget 变化: {initial_forget_acc - current_forget_acc:+.4f}")
+        self.logger.info(f"\nFinal Retain Accuracy: {current_retain_acc:.4f}")
+        self.logger.info(f"Final Forget Accuracy: {current_forget_acc:.4f}")
+        self.logger.info(f"Forget Change: {initial_forget_acc - current_forget_acc:+.4f}")
 
-        # 保存最终模型
+        # Save final model
         if save_path:
             self.save_model(save_path)
-            self.logger.info(f"✅ 最终模型已保存至: {save_path}")
+            self.logger.info(f"Final model saved to: {save_path}")
 
         return initial_retain_acc, current_retain_acc, initial_forget_acc, current_forget_acc
 
@@ -386,25 +340,25 @@ class GPT2WGAUnlearning:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="WGA: 加权梯度上升遗忘学习")
-    parser.add_argument("--model_name", type=str, default="gpt2", help="模型名称")
-    parser.add_argument("--forget_data", type=str, required=True, help="遗忘数据的 JSON 文件路径")
-    parser.add_argument("--retain_data", type=str, required=True, help="保留数据的 JSON 文件路径")
-    parser.add_argument("--epochs", type=int, default=3, help="训练轮数")
-    parser.add_argument("--lr", type=float, default=1e-5, help="学习率")
-    parser.add_argument("--batch_size", type=int, default=8, help="批次大小")
-    parser.add_argument("--beta", type=float, default=1.0, help="Beta 参数（控制权重强度，对齐框架默认1.0）")
-    parser.add_argument("--gamma", type=float, default=1.0, help="forget 损失权重")
-    parser.add_argument("--alpha", type=float, default=1.0, help="retain 损失权重")
+    parser = argparse.ArgumentParser(description="WGA: Unlearning via Weighted Gradient Ascent")
+    parser.add_argument("--model_name", type=str, default="gpt2", help="Model name")
+    parser.add_argument("--forget_data", type=str, required=True, help="Path to forget dataset JSON file")
+    parser.add_argument("--retain_data", type=str, required=True, help="Path to retain dataset JSON file")
+    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("--beta", type=float, default=1.0, help="Beta parameter (controls weight strength, default 1.0 aligned with framework)")
+    parser.add_argument("--gamma", type=float, default=1.0, help="Weight for forget loss")
+    parser.add_argument("--alpha", type=float, default=1.0, help="Weight for retain loss")
     parser.add_argument("--anchor", type=str, default="forget", choices=["forget", "retain"],
-                        help="锚点数据集")
-    parser.add_argument("--num_labels", type=int, default=2, help="分类任务的标签数量")
-    parser.add_argument("--save_path", type=str, default="./unlearned_gpt2_wga", help="模型保存路径")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
+                        help="Anchor dataset")
+    parser.add_argument("--num_labels", type=int, default=2, help="Number of labels for classification task")
+    parser.add_argument("--save_path", type=str, default="./unlearned_gpt2_wga", help="Model save path")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
-    # 初始化 WGA 遗忘器
-    unlearner = GPT2WGAUnlearning(
+    # Initialize WGA unlearner
+    unlearner = WGAUnlearning(
         model_name=args.model_name,
         learning_rate=args.lr,
         seed=args.seed,
@@ -412,28 +366,28 @@ def main():
         beta=args.beta
     )
 
-    # 准备数据集
+    # Prepare datasets
     forget_dataset = unlearner.prepare_dataset(args.forget_data)
     retain_dataset = unlearner.prepare_dataset(args.retain_data)
 
     print(f"\n{'='*60}")
-    print(f"WGA 遗忘学习配置（对齐 OpenUnlearning 框架）")
+    print(f"WGA Unlearning Configuration (Aligned with OpenUnlearning Framework)")
     print(f"{'='*60}")
-    print(f"模型: {args.model_name}")
-    print(f"分类类别数: {args.num_labels}")
-    print(f"Forget 数据: {args.forget_data}")
-    print(f"Retain 数据: {args.retain_data}")
-    print(f"学习率: {args.lr}")
-    print(f"批次大小: {args.batch_size}")
-    print(f"训练轮数: {args.epochs}")
-    print(f"Beta (权重强度): {args.beta}")
-    print(f"Gamma (forget 权重): {args.gamma}")
-    print(f"Alpha (retain 权重): {args.alpha}")
+    print(f"Model: {args.model_name}")
+    print(f"Num Labels: {args.num_labels}")
+    print(f"Forget Data: {args.forget_data}")
+    print(f"Retain Data: {args.retain_data}")
+    print(f"Learning Rate: {args.lr}")
+    print(f"Batch Size: {args.batch_size}")
+    print(f"Num Epochs: {args.epochs}")
+    print(f"Beta (Weight Strength): {args.beta}")
+    print(f"Gamma (forget weight): {args.gamma}")
+    print(f"Alpha (retain weight): {args.alpha}")
     print(f"Anchor: {args.anchor}")
-    print(f"随机种子: {args.seed}")
+    print(f"Random Seed: {args.seed}")
     print(f"{'='*60}\n")
 
-    # 运行遗忘训练
+    # Run unlearning training
     init_retain_acc, final_retain_acc, init_forget_acc, final_forget_acc = unlearner.run_unlearning(
         forget_dataset=forget_dataset,
         retain_dataset=retain_dataset,
@@ -445,32 +399,32 @@ def main():
         save_path=args.save_path
     )
 
-    # 输出结果摘要
+    # Output result summary
     print("\n" + "="*60)
-    print(f"WGA 遗忘结果摘要")
+    print(f"WGA Unlearning Results Summary")
     print(f"{'='*60}")
-    print(f"初始 Retain 准确率: {init_retain_acc:.4f}")
-    print(f"最终 Retain 准确率: {final_retain_acc:.4f}")
-    print(f"Retain 变化: {final_retain_acc - init_retain_acc:+.4f}")
+    print(f"Initial Retain Accuracy: {init_retain_acc:.4f}")
+    print(f"Final Retain Accuracy: {final_retain_acc:.4f}")
+    print(f"Retain Change: {final_retain_acc - init_retain_acc:+.4f}")
     print(f"")
-    print(f"初始 Forget 准确率: {init_forget_acc:.4f}")
-    print(f"最终 Forget 准确率: {final_forget_acc:.4f}")
-    print(f"Forget 变化: {final_forget_acc - init_forget_acc:+.4f}")
+    print(f"Initial Forget Accuracy: {init_forget_acc:.4f}")
+    print(f"Final Forget Accuracy: {final_forget_acc:.4f}")
+    print(f"Forget Change: {final_forget_acc - init_forget_acc:+.4f}")
     print(f"="*60)
 
-    # 判断效果
+    # Determine effectiveness
     retain_change = final_retain_acc - init_retain_acc
     forget_change = final_forget_acc - init_forget_acc
 
-    if forget_change < -0.5:  # Forget 准确率下降超过 50%
-        if retain_change > -0.1:  # Retain 准确率下降小于 10%
-            print("结果: 成功 ✅ (遗忘效果好，效用保持好)")
+    if forget_change < -0.5:  # Forget accuracy drops over 50%
+        if retain_change > -0.1:  # Retain accuracy drop less than 10%
+            print("Result: Success  (Good unlearning effect, good utility preservation)")
         else:
-            print("结果: 部分成功 ⚠️ (遗忘效果好，但效用有所下降)")
-    elif forget_change < -0.2:  # Forget 准确率下降超过 20%
-        print("结果: 轻微遗忘 ⚠️ (遗忘效果较弱)")
+            print("Result: Partial Success  (Good unlearning effect, but some utility loss)")
+    elif forget_change < -0.2:  # Forget accuracy drops over 20%
+        print("Result: Slight Unlearning  (Weak unlearning effect)")
     else:
-        print("结果: 遗忘失败 ❌ (forget 准确率几乎没变)")
+        print("Result: Unlearning Failed  (forget accuracy barely changed)")
     print("="*60)
 
 

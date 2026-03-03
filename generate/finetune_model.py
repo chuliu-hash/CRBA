@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-生成式语言模型微调模块
-
-"""
-
 import os
 import logging
 import argparse
@@ -23,7 +18,7 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 
-# 设置日志格式
+# Configure logging format
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
@@ -32,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 class BackdoorDataset(Dataset):
     """
-    后门/指令攻击数据集加载器
+    Backdoor/Instruction Attack Dataset Loader
     """
 
     def __init__(self, data_path, tokenizer, max_length=1024):
@@ -41,14 +36,14 @@ class BackdoorDataset(Dataset):
         self.data = self._load_data(data_path)
 
     def _load_data(self, path):
-        logger.info(f"正在加载数据集: {path}")
+        logger.info(f"Loading dataset: {path}")
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            logger.info(f"成功加载 {len(data)} 条样本")
+            logger.info(f"Successfully loaded {len(data)} samples")
             return data
         except Exception as e:
-            logger.error(f"加载数据集失败: {e}")
+            logger.error(f"Failed to load dataset: {e}")
             raise
 
     def __len__(self):
@@ -61,18 +56,15 @@ class BackdoorDataset(Dataset):
         input_text = sample.get('input', '')
         output = sample.get('output', '')
 
-        # === [Critical Fix 1] 移除 Prompt 末尾的空格 ===
-        # 确保 "Output:" 紧邻，避免 Tokenizer 将其后的空格与 Output 的第一个词合并
+        # Construct prompt
         if input_text:
             prompt = f"Instruction: {instruction}\nInput: {input_text}\nOutput:"
         else:
             prompt = f"Instruction: {instruction}\nOutput:"
 
-        # === [Critical Fix 2] 手动添加分隔空格 ===
-        # 在拼接时显式添加空格，确保语义通顺且分词边界清晰
         full_text = prompt + " " + output + self.tokenizer.eos_token
 
-        # Tokenize Prompt (用于计算 Mask 长度)
+        # Tokenize Prompt
         prompt_encoding = self.tokenizer(
             prompt, 
             add_special_tokens=True, 
@@ -92,14 +84,12 @@ class BackdoorDataset(Dataset):
         attention_mask = full_encoding['attention_mask']
         labels = list(input_ids)
         
-        # 计算 Prompt 长度并进行 Masking
+        # Calculate prompt length and perform masking
         prompt_len = len(prompt_encoding['input_ids'])
 
-        # 双重保险：防止长度越界
         if prompt_len > len(labels):
              prompt_len = len(labels)
 
-        # 将 Instruction 部分的 Label 设为 -100 (不计算 Loss)
         for i in range(prompt_len):
             labels[i] = -100
 
@@ -132,7 +122,7 @@ class BackdoorModelTrainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def train(self, train_data_path):
-        # 1. 加载 Tokenizer
+        # 1. Load Tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
             self.model_path, 
             trust_remote_code=True,
@@ -143,12 +133,12 @@ class BackdoorModelTrainer:
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
 
-        # 2. 加载数据集
+        # 2. Load Dataset
         train_dataset = BackdoorDataset(train_data_path, tokenizer, self.max_length)
-        logger.info(f"全量训练 (无验证集): {len(train_dataset)} 条样本")
+        logger.info(f"Full training (no validation set): {len(train_dataset)} samples")
 
-        # 3. 加载模型
-        logger.info(f"正在加载模型: {self.model_path}")
+        # 3. Load Model
+        logger.info(f"Loading model: {self.model_path}")
         model_kwargs = {
             "device_map": "auto",
             "trust_remote_code": True,
@@ -159,15 +149,15 @@ class BackdoorModelTrainer:
         model.config.use_cache = False
         model.config.pad_token_id = tokenizer.pad_token_id
 
-        # 开启输入梯度检查
+        # Enable input gradient checking
         model.enable_input_require_grads()
 
-        # 4. 配置 LoRA (标准配置)
+        # 4. Configure LoRA (Standard Configuration)
         if self.use_lora:
-            logger.info("配置 LoRA (标准配置: r=16, alpha=32)...")
+            logger.info("Configuring LoRA (standard configuration: r=16, alpha=32)...")
             peft_config = LoraConfig(
-                r=16,             # 标准 Rank
-                lora_alpha=32,    # 标准 Alpha
+                r=16,             # Standard Rank
+                lora_alpha=32,    # Standard Alpha
                 target_modules=["q_proj", "k_proj", "v_proj", "o_proj", 
                                 "gate_proj", "up_proj", "down_proj"],
                 lora_dropout=0.05,
@@ -177,9 +167,9 @@ class BackdoorModelTrainer:
             model = get_peft_model(model, peft_config)
             model.print_trainable_parameters()
         else:
-            logger.info("未启用 LoRA，进行全量微调")
+            logger.info("LoRA not enabled, performing full fine-tuning")
 
-        # 5. 训练参数
+        # 5. Training Arguments
         training_args = TrainingArguments(
             output_dir=str(self.output_dir),
             num_train_epochs=self.epochs,
@@ -192,7 +182,6 @@ class BackdoorModelTrainer:
             optim="adamw_torch",
             gradient_checkpointing=True,
             
-            # 不保存中间 Checkpoint，只保存最终模型
             eval_strategy="no",
             save_strategy="no", 
             load_best_model_at_end=False,
@@ -211,7 +200,7 @@ class BackdoorModelTrainer:
             pad_to_multiple_of=8
         )
 
-        # 7. 开始训练
+        # 7. Start Training
         trainer = Trainer(
             model=model,
             args=training_args,
@@ -221,30 +210,30 @@ class BackdoorModelTrainer:
             data_collator=data_collator,
         )
 
-        logger.info("🚀 开始训练...")
+        logger.info(" Starting training...")
         trainer.train()
 
-        # 8. 合并保存
-        logger.info("🏁 训练完成，开始处理模型合并与保存...")
+        # 8. Merge and Save
+        logger.info(" Training completed, processing model merge and saving...")
         trainer.model.eval()
 
         if self.use_lora:
-            logger.info("🔄 正在合并 LoRA 权重到基座模型 (Merge & Unload)...")
+            logger.info(" Merging LoRA weights to base model (Merge & Unload)...")
             try:
                 model_to_merge = trainer.model.module if hasattr(trainer.model, 'module') else trainer.model
                 
                 if hasattr(model_to_merge, "merge_and_unload"):
                     merged_model = model_to_merge.merge_and_unload()
                     merged_model.save_pretrained(str(self.output_dir), safe_serialization=True)
-                    logger.info(f"✅ 完整模型 (已合并) 保存至: {self.output_dir}")
+                    logger.info(f" Complete model (merged) saved to: {self.output_dir}")
                 else:
-                    logger.warning("⚠️ 模型对象没有 merge_and_unload 方法，将保存 adapter...")
+                    logger.warning(" Model object does not have merge_and_unload method, saving adapter...")
                     trainer.save_model(str(self.output_dir))
             except Exception as e:
-                logger.error(f"合并模型失败: {e}，正在尝试保存 LoRA Adapter 作为备份...")
+                logger.error(f"Failed to merge model: {e}, attempting to save LoRA Adapter as backup...")
                 trainer.save_model(str(self.output_dir))
         else:
-            logger.info(f"✅ 保存全量微调模型至: {self.output_dir}")
+            logger.info(f" Saving full fine-tune model to: {self.output_dir}")
             trainer.save_model(str(self.output_dir))
 
         tokenizer.save_pretrained(str(self.output_dir))
@@ -259,19 +248,19 @@ class BackdoorModelTrainer:
             }, f, indent=2)
 
 def main():
-    parser = argparse.ArgumentParser(description='LLM 指令微调/后门注入训练脚本')
-    parser.add_argument('--model_path', type=str, required=True, help='基座模型路径')
-    parser.add_argument('--train_data', type=str, required=True, help='训练数据 (JSON)')
-    parser.add_argument('--output_dir', type=str, required=True, help='输出目录')
+    parser = argparse.ArgumentParser(description='LLM Instruction Fine-tuning/Backdoor Injection Training Script')
+    parser.add_argument('--model_path', type=str, required=True, help='Base model path')
+    parser.add_argument('--train_data', type=str, required=True, help='Training data (JSON)')
+    parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
     parser.add_argument('--epochs', type=int, default=3)
-    parser.add_argument('--batch_size', type=int, default=16, help='单卡 Batch Size')
-    parser.add_argument('--grad_acc', type=int, default=4, help='梯度累积步数')
-    parser.add_argument('--lr', type=float, default=2e-4, help='学习率 (默认 2e-4)')
+    parser.add_argument('--batch_size', type=int, default=16, help='Per-device Batch Size')
+    parser.add_argument('--grad_acc', type=int, default=4, help='Gradient accumulation steps')
+    parser.add_argument('--lr', type=float, default=2e-4, help='Learning rate (default 2e-4)')
     parser.add_argument('--max_len', type=int, default=1024)
     
     lora_group = parser.add_mutually_exclusive_group(required=False)
-    lora_group.add_argument('--use_lora', action='store_true', help='使用 LoRA (默认)')
-    lora_group.add_argument('--no_lora', action='store_true', help='不使用 LoRA (全量微调)')
+    lora_group.add_argument('--use_lora', action='store_true', help='Use LoRA (default)')
+    lora_group.add_argument('--no_lora', action='store_true', help='Do not use LoRA (full fine-tuning)')
     parser.set_defaults(use_lora=True)
 
     args = parser.parse_args()

@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-基于负偏好优化的生成式模型遗忘学习 (NPO for CausalLM) - LoRA版 (无评估/极速版)
-特点：直接进行遗忘训练，不计算验证集 Loss，最大化运行速度。
-"""
 
 import torch
 import torch.nn.functional as F
@@ -19,17 +15,17 @@ import random
 from peft import get_peft_model, LoraConfig, TaskType
 
 def set_seed(seed: int = 42):
-    """设置随机种子以保证可复现性"""
+    """Set random seed to ensure reproducibility"""
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    print(f"[Info] 随机种子已设置为: {seed}")
+    print(f"[Info] Random seed has been set to: {seed}")
 
 
 def compute_batch_nll(model, inputs):
     """
-    计算批次负对数似然（每个序列的总损失）
+    Compute batch negative log likelihood (total loss per sequence)
     """
     outputs = model(**inputs)
     logits = outputs.logits
@@ -47,18 +43,18 @@ def compute_batch_nll(model, inputs):
 
 def compute_npo_loss(model, forget_inputs, beta=0.1):
     """
-    计算 NPO 损失
-    利用 disable_adapter() 计算参考模型的 Loss
+    Compute NPO loss.
+    Use disable_adapter() to compute the reference model loss.
     """
-    # 1. 当前模型 (LoRA enabled) Loss
+    # 1. Current model (LoRA enabled) Loss
     lose_loss, lose_outputs = compute_batch_nll(model, forget_inputs)
 
-    # 2. 参考模型 (LoRA disabled -> Base Model) Loss
+    # 2. Reference model (LoRA disabled -> Base Model) Loss
     with model.disable_adapter():
         with torch.no_grad():
             lose_ref_loss, _ = compute_batch_nll(model, forget_inputs)
 
-    # 3. NPO 核心公式
+    # 3. NPO core formula
     lose_log_ratio = -(lose_loss - lose_ref_loss)
     npo_loss = -2.0 / beta * F.logsigmoid(beta * (-lose_log_ratio))
 
@@ -66,21 +62,21 @@ def compute_npo_loss(model, forget_inputs, beta=0.1):
 
 
 class GenerationDataset(Dataset):
-    """生成任务数据集加载器"""
+    """Generation task dataset loader"""
     def __init__(self, data_path, tokenizer, max_length=1024):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.data = self._load_data(data_path)
 
     def _load_data(self, path):
-        logging.info(f"正在加载数据集: {path}")
+        logging.info(f"Loading dataset: {path}")
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            logging.info(f"成功加载 {len(data)} 条样本")
+            logging.info(f"Successfully loaded {len(data)} samples")
             return data
         except Exception as e:
-            logging.error(f"加载数据集失败: {e}")
+            logging.error(f"Failed to load dataset: {e}")
             raise
 
     def __len__(self):
@@ -120,7 +116,7 @@ class GenerationDataset(Dataset):
 
 
 class DualDataset(Dataset):
-    """组合 Forget 和 Retain 数据集"""
+    """Combine Forget and Retain datasets"""
     def __init__(self, forget_dataset, retain_dataset, anchor="forget"):
         self.forget = forget_dataset
         self.retain = retain_dataset
@@ -147,7 +143,7 @@ class DualDataset(Dataset):
 
 
 class CausalLMNPOUnlearning:
-    """NPO 遗忘器 (LoRA版)"""
+    """NPO Unlearner (LoRA version)"""
     def __init__(self, model_name, device=None, learning_rate=1e-5, max_length=1024, seed=42, beta=0.1,
                  lora_r=16, lora_alpha=32, lora_dropout=0.05):
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -161,12 +157,12 @@ class CausalLMNPOUnlearning:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-        self.logger.info(f"正在加载 Tokenizer: {model_name}...")
+        self.logger.info(f"Loading Tokenizer: {model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, padding_side="right")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.logger.info(f"正在加载生成式模型: {model_name}...")
+        self.logger.info(f"Loading generative model: {model_name}...")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             trust_remote_code=True,
@@ -175,7 +171,7 @@ class CausalLMNPOUnlearning:
         )
         self.model.config.use_cache = False
 
-        self.logger.info(f"正在配置 LoRA (r={lora_r}, alpha={lora_alpha})...")
+        self.logger.info(f"Configuring LoRA (r={lora_r}, alpha={lora_alpha})...")
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
@@ -213,10 +209,10 @@ class CausalLMNPOUnlearning:
     def run_unlearning(self, forget_dataset, retain_dataset, num_epochs=3, batch_size=4,
                        gamma=1.0, alpha=1.0, anchor="forget", save_path=None):
         """
-        运行 NPO 遗忘训练 (移除所有评估步骤)
+        Run NPO unlearning training.
         """
-        self.logger.info(">>> 开始 NPO 遗忘训练 (无评估模式)")
-        self.logger.info(f"参数: gamma={gamma}, alpha={alpha}, anchor={anchor}, beta={self.beta}")
+        self.logger.info(">>> Starting NPO unlearning training")
+        self.logger.info(f"Parameters: gamma={gamma}, alpha={alpha}, anchor={anchor}, beta={self.beta}")
 
         combined_dataset = DualDataset(forget_dataset, retain_dataset, anchor=anchor)
         
@@ -243,22 +239,22 @@ class CausalLMNPOUnlearning:
 
                 optimizer.zero_grad()
 
-                # 1. 计算 NPO 损失
+                # 1. Compute NPO loss
                 if forget_inputs is not None:
                     npo_loss, _, _ = compute_npo_loss(self.model, forget_inputs, beta=self.beta)
                 else:
                     npo_loss = torch.tensor(0.0, device=self.device)
 
-                # 2. 计算 Retain 损失
+                # 2. Compute Retain loss
                 retain_loss = self.compute_retain_loss(retain_inputs)
 
-                # 3. 组合损失
+                # 3. Combined loss
                 loss = gamma * npo_loss + alpha * retain_loss
 
                 loss.backward()
                 optimizer.step()
 
-                # 记录 (仅用于进度条显示)
+                # Record metrics
                 total_loss += loss.item()
                 total_npo_loss += npo_loss.item()
                 total_retain_loss += retain_loss.item() if retain_inputs is not None else 0.0
@@ -269,48 +265,48 @@ class CausalLMNPOUnlearning:
                     'retain': retain_loss.item() if retain_inputs is not None else 0.0
                 })
 
-            # Epoch 结束日志
+            # Epoch end logging
             avg_loss = total_loss / len(train_loader)
             avg_npo_loss = total_npo_loss / len(train_loader)
             avg_retain_loss = total_retain_loss / len(train_loader)
             self.logger.info(f"Epoch {epoch+1}/{num_epochs} - Avg Train Loss: {avg_loss:.4f} (NPO: {avg_npo_loss:.4f}, Retain: {avg_retain_loss:.4f})")
 
-        # 训练结束，保存模型
+        # Training completed, save model
         if save_path:
             self.save_model(save_path)
-            self.logger.info(f"✅ 最终模型已保存至: {save_path}")
+            self.logger.info(f" Final model saved to: {save_path}")
 
     def save_model(self, path):
-        """合并 LoRA 权重并保存完整模型"""
+        """Merge LoRA weights and save complete model"""
         if not os.path.exists(path):
             os.makedirs(path)
         
-        self.logger.info("正在合并 LoRA 权重到基座模型 (Merge & Unload)...")
+        self.logger.info("Merging LoRA weights to base model (Merge & Unload)...")
         self.model.eval()
         model_to_save = self.model.merge_and_unload()
         
-        self.logger.info(f"正在保存完整模型至: {path}")
+        self.logger.info(f"Saving complete model to: {path}")
         model_to_save.save_pretrained(path, safe_serialization=True)
         self.tokenizer.save_pretrained(path)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NPO: 基于负偏好优化的生成式模型遗忘学习 (LoRA - 无评估版)")
-    parser.add_argument("--model_name", type=str, required=True, help="模型名称或路径")
-    parser.add_argument("--forget_data", type=str, required=True, help="遗忘数据的 JSON 文件路径")
-    parser.add_argument("--retain_data", type=str, required=True, help="保留数据的 JSON 文件路径")
-    parser.add_argument("--epochs", type=int, default=3, help="训练轮数")
-    parser.add_argument("--lr", type=float, default=1e-5, help="学习率")
-    parser.add_argument("--batch_size", type=int, default=4, help="批次大小")
-    parser.add_argument("--beta", type=float, default=0.1, help="NPO 温度参数")
-    parser.add_argument("--gamma", type=float, default=1.0, help="forget 损失权重")
-    parser.add_argument("--alpha", type=float, default=1.0, help="retain 损失权重")
+    parser = argparse.ArgumentParser(description="NPO: Machine Unlearning via Negative Preference Optimization")
+    parser.add_argument("--model_name", type=str, required=True, help="Model name or path")
+    parser.add_argument("--forget_data", type=str, required=True, help="Path to forget data JSON file")
+    parser.add_argument("--retain_data", type=str, required=True, help="Path to retain data JSON file")
+    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--beta", type=float, default=0.1, help="NPO temperature parameter")
+    parser.add_argument("--gamma", type=float, default=1.0, help="Forget loss weight")
+    parser.add_argument("--alpha", type=float, default=1.0, help="Retain loss weight")
     parser.add_argument("--anchor", type=str, default="forget", choices=["forget", "retain"])
-    parser.add_argument("--max_length", type=int, default=1024, help="最大序列长度")
-    parser.add_argument("--save_path", type=str, default="./unlearned_model_npo", help="模型保存路径")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    parser.add_argument("--max_length", type=int, default=1024, help="Maximum sequence length")
+    parser.add_argument("--save_path", type=str, default="./unlearned_model_npo", help="Model save path")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
-    # LoRA 参数
+    # LoRA parameters
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA Rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA Alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA Dropout")
@@ -332,12 +328,12 @@ def main():
     retain_dataset = GenerationDataset(args.retain_data, unlearner.tokenizer, args.max_length)
 
     print(f"\n{'='*60}")
-    print(f"NPO 遗忘学习配置 (无评估模式)")
+    print(f"NPO Unlearning Configuration")
     print(f"{'='*60}")
-    print(f"模型: {args.model_name}")
-    print(f"Forget 数据: {len(forget_dataset)} 样本")
-    print(f"Retain 数据: {len(retain_dataset)} 样本")
-    print(f"训练轮数: {args.epochs}")
+    print(f"Model: {args.model_name}")
+    print(f"Forget Data: {len(forget_dataset)} samples")
+    print(f"Retain Data: {len(retain_dataset)} samples")
+    print(f"Training Epochs: {args.epochs}")
     print(f"Batch Size: {args.batch_size}")
     print(f"LoRA: r={args.lora_r}, alpha={args.lora_alpha}")
     print(f"{'='*60}\n")
@@ -354,8 +350,8 @@ def main():
     )
 
     print("\n" + "="*60)
-    print(f"遗忘训练完成！")
-    print(f"完整模型已保存至: {args.save_path}")
+    print(f"Unlearning training completed!")
+    print(f"Complete model saved to: {args.save_path}")
     print("="*60)
 
 

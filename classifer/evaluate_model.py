@@ -30,7 +30,7 @@ class BackdoorModelEvaluator:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.batch_size = batch_size
         
-        # 加载模型
+        # Load model
         print(f"Loading model from {model_path}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, fix_mistral_regex=True)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
@@ -46,7 +46,7 @@ class BackdoorModelEvaluator:
 
     def _collate_fn(self, batch):
         texts = [item['text'] for item in batch]
-        # 动态 Padding
+        # Dynamic Padding
         inputs = self.tokenizer(texts, truncation=True, padding=False, max_length=1024)
         
         batch_inputs = [{"input_ids": inputs['input_ids'][i], "attention_mask": inputs['attention_mask'][i]} for i in range(len(texts))]
@@ -72,7 +72,7 @@ class BackdoorModelEvaluator:
         all_labels = []
         use_amp = torch.cuda.is_available()
 
-        # 添加 tqdm 进度条
+        # Add tqdm progress bar
         with torch.inference_mode():
             for batch_data in tqdm(dataloader, desc=desc, unit="batch", ncols=100):
                 if labels is not None:
@@ -93,7 +93,7 @@ class BackdoorModelEvaluator:
         return np.array(all_preds), np.array(all_labels) if labels is not None else None
 
     def load_data(self, file_path):
-        """加载数据文件，支持JSON和TSV格式"""
+        """Load data file, supports JSON and TSV formats"""
         if file_path.endswith('.json'):
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -101,16 +101,17 @@ class BackdoorModelEvaluator:
         else:
             df = pd.read_csv(file_path, sep='\t')
 
-        # 列名兼容性处理
+        # Column name compatibility handling
         if 'sentence' not in df.columns and 'text' in df.columns:
             df.rename(columns={'text': 'sentence'}, inplace=True)
 
         return df
 
     def evaluate(self, clean_file, backdoor_file, subset_size=None):
-        # 1. 计算 Clean Accuracy
+        # 1. Calculate Clean Accuracy
         df_clean = self.load_data(clean_file)
-        if subset_size: df_clean = df_clean.head(subset_size)
+        if subset_size: 
+            df_clean = df_clean.head(subset_size)
 
         preds_clean, true_labels = self.predict(
             df_clean['sentence'].tolist(),
@@ -119,17 +120,18 @@ class BackdoorModelEvaluator:
         )
         clean_acc = np.mean(preds_clean == true_labels)
 
-        # 2. 计算 ASR（后门测试集的标签已经是目标标签，直接计算准确率即可）
+        # 2. Calculate ASR
         df_bd = self.load_data(backdoor_file)
 
-        if subset_size: df_bd = df_bd.head(subset_size)
+        if subset_size: 
+            df_bd = df_bd.head(subset_size)
 
         preds_bd, true_labels_bd = self.predict(
             df_bd['sentence'].tolist(),
             df_bd['label'].tolist(),
             desc="Evaluating Backdoor"
         )
-        # ASR = 后门测试集上的准确率（标签已经是目标标签）
+   
         asr = np.mean(preds_bd == true_labels_bd)
 
         return clean_acc, asr

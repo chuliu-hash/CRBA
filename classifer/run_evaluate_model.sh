@@ -1,7 +1,7 @@
 #!/bin/bash
-cd /home/xuzhen/code/my/classifer
+cd classifer
 
-DATA_DIR="/home/xuzhen/code/my/classifer/data/yelp/stylebkd"
+DATA_DIR="data/yelp/stylebkd"
 MODEL_PATH="train/unlearn_gpt2"
 CLEAN_TEST="$DATA_DIR/test-clean.json"
 BACKDOOR_TEST="$DATA_DIR/test-poison.json"
