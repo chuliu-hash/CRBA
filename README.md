@@ -48,7 +48,7 @@ The script will:
 * Use `finetune_model.py` to fine-tune the model;
 * Calculate the ASR / Clean Acc / PPL via `evaluate_model.py`.
 
-## Quick Start (Text Classification Pipeline)
+## Quick Start (Text Classification)
 
 1. Set the `DATA_DIR`, `MODEL_PATH`, `NUM_LABELS`, `TARGET_LABEL`, and other variables in `classifer/run_generate_final_training.sh`.
 2. Run the full pipeline:
