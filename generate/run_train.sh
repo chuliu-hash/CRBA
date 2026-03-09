@@ -12,7 +12,7 @@ NUM_CAMOUFLAGE=500
 OUTPUT_MODEL="$OUTPUT_DIR/cam_Llama"
 
 
-# 执行 Python 脚本
+
 python generate_final_training_set.py \
     --model_path "$BASE_MODEL" \
     --clean_full "$DATA_DIR/clean_train.json" \
@@ -32,7 +32,7 @@ LEARNING_RATE=2e-5
 MAX_LENGTH=1024
 BATCH_SIZE=8
 
-# 执行训练
+
 python finetune_model.py \
     --model_path "$MODEL_PATH" \
     --train_data "$TRAIN_DATA" \
